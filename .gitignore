@@ -1,0 +1,7 @@
+# Runtime data (segments, journals, reports, snapshots)
+data/
+
+# OS / editor
+.DS_Store
+*.swp
+*~

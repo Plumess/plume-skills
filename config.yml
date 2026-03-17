@@ -1,0 +1,124 @@
+# plume-skills 全局配置
+# plume_root 由 install.sh --universal 自动写入
+plume_root: "/home/plume/plume-skills"
+
+# 本地化设置
+locale:
+  # 时区：影响所有时间戳（segment 文件名、日报日期边界、remind_at 判断等）
+  timezone: "Asia/Shanghai"
+  # 生成文档语言：日报、研究报告、设计文档、实施计划等人类可阅读文档均使用此语言
+  language: "zh-CN"
+
+# 自动保存提醒
+context:
+  # 用户消息轮次阈值：自上次 context-keeper SAVE 后，累计 N 轮用户消息时注入 [CONTEXT-SAVE-RECOMMENDED]
+  save_remind_after: 15
+
+digest:
+  # 日报时间窗口：日历日 00:00~23:59（timezone 由 locale.timezone 决定）
+
+  # 日报默认作用域：只检索 slug 中包含此关键词的项目。
+  # 目的：隔离工作/个人项目——公司项目统一在同一父目录下即可。
+  # 留空则每次生成时由用户指定。
+  default_scope: ""  # 示例: "edgeexploration"
+
+  # 自动生成：true 时在 remind_at 时间点自动执行日报生成（无需用户确认）
+  # false 时仅提示用户（[DIGEST-HINT]）
+  auto_generate: false
+
+  # 提醒/自动生成的时间窗口（±30 分钟内触发）
+  # 条件：时间窗口内 + scope 内 segments >= 3 + 当日日报不存在
+  remind_at:
+    - "09:00"    # 早间
+    - "18:00"    # 晚间
+
+# context-keeper segment tags 约束
+# Claude 优先使用此列表中的值，确保跨 segment 检索一致性。
+# 内容明确涉及列表外概念时可新增（遵循 category:value 格式）。
+# 删除或注释掉某个 category 即取消该类约束，Claude 自由提取。
+tags:
+  tech:
+    - react
+    - vue
+    - nextjs
+    - typescript
+    - javascript
+    - python
+    - go
+    - rust
+    - java
+    - swift
+    - node
+    - deno
+    - bun
+    - tailwind
+    - prisma
+    - drizzle
+    - postgres
+    - mysql
+    - sqlite
+    - redis
+    - mongodb
+    - elasticsearch
+    - docker
+    - kubernetes
+    - terraform
+    - nginx
+    - graphql
+    - grpc
+    - rest-api
+    - websocket
+    - aws
+    - gcp
+    - azure
+    - cloudflare
+    - vercel
+    - supabase
+    - firebase
+  module:
+    - auth
+    - user
+    - payment
+    - order
+    - notification
+    - search
+    - analytics
+    - admin
+    - onboarding
+    - settings
+    - dashboard
+    - api
+    - database
+    - cache
+    - queue
+    - storage
+    - logging
+    - monitoring
+    - ci-cd
+    - testing
+    - docs
+    - i18n
+    - security
+    - migration
+    - config
+  activity:
+    - feature
+    - bugfix
+    - refactor
+    - research
+    - design
+    - review
+    - test
+    - deploy
+    - config
+    - docs
+    - performance
+    - security
+    - cleanup
+    - debug
+    - spike
+    - migration
+  ref:
+    # ref 类不预定义值——由项目实际的 issue/PR 编号填充
+    # 格式示例: ref:ISSUE-123, ref:PR-456, ref:JIRA-ABC-789
+    []

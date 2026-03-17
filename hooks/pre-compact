@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# plume-skills PreCompact hook
+# Two duties:
+# 1. Inject [CONTEXT-SAVE-URGENT] so Claude saves before compact truncates context
+# 2. Write marker file so user-prompt-submit can inject recovery after compact
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUME_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Read cwd from hook input (JSON on stdin)
+HOOK_INPUT=""
+if [ ! -t 0 ]; then
+  HOOK_INPUT="$(cat)"
+fi
+
+CWD=""
+if [ -n "$HOOK_INPUT" ]; then
+  CWD="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd",""))' 2>/dev/null || true)"
+fi
+
+# Fallback to pwd
+if [ -z "$CWD" ]; then
+  CWD="$(pwd)"
+fi
+
+SLUG="$(echo "$CWD" | sed 's|^/||; s|/|-|g')"
+MARKER_DIR="$PLUME_ROOT/data"
+MARKER="$MARKER_DIR/.compact-marker"
+
+mkdir -p "$MARKER_DIR"
+
+# Write marker with slug and timestamp (for post-compact recovery)
+cat > "$MARKER" <<EOF
+slug=$SLUG
+timestamp=$(date -u +%Y-%m-%dT%H-%M)
+cwd=$CWD
+EOF
+
+# Inject urgent save signal into context (Claude will save before compact proceeds)
+MSG="[CONTEXT-SAVE-URGENT] Compact is imminent. Call context-keeper SAVE immediately — this is the last chance before context is truncated."
+
+ESCAPED="$(printf '%s' "$MSG" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' 2>/dev/null || printf '%s' "$MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | awk '{printf "%s\\n", $0}')"
+
+cat <<EOF
+{
+  "hookSpecificOutput": {
+    "additionalContext": $ESCAPED
+  }
+}
+EOF
