@@ -12,6 +12,7 @@ err()   { echo -e "${RED}[plume]${NC} $*" >&2; }
 
 PLUME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=false
+CLEAN_PERMS=false
 
 # ─── Skill 分类 ──────────────────────────────────────────────
 # skills/ 中的原创/wrapper skills（通用安装）
@@ -107,6 +108,43 @@ merge_json_permissions() {
     .[0] * { permissions: { allow: ($existing + $new | unique) } }
   ' "$target" "$template" > "$tmp" && mv "$tmp" "$target"
   ok "  已合并权限到 $target（新增 $new_count 条）"
+}
+
+# 精确同步权限：以模板为准，移除脏数据，补入新增项
+sync_json_permissions() {
+  local target="$1" template="$2"
+  if ! command -v jq &>/dev/null; then
+    warn "未找到 jq — 无法同步权限。请安装 jq 后重新执行。"
+    return 0
+  fi
+  if [ ! -f "$target" ]; then
+    warn "  $target 不存在，请先执行 --universal 安装"
+    return 0
+  fi
+  # Compare: how many to add, how many to remove
+  local diff_info
+  diff_info="$(jq -s '
+    (.[0].permissions.allow // []) as $existing |
+    (.[1].permissions.allow // []) as $template |
+    { add: ($template - $existing | length), remove: ($existing - $template | length) }
+  ' "$target" "$template" 2>/dev/null || echo '{"add":-1,"remove":-1}')"
+  local to_add to_remove
+  to_add="$(echo "$diff_info" | jq '.add')"
+  to_remove="$(echo "$diff_info" | jq '.remove')"
+  if [ "$to_add" = "0" ] && [ "$to_remove" = "0" ]; then
+    info "  权限已与模板一致，无需同步"
+    return 0
+  fi
+  if $DRY_RUN; then
+    info "  将同步权限（新增 $to_add 条，移除 $to_remove 条脏数据）"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  # Replace permissions.allow with template's, keep everything else (hooks, etc.)
+  jq -s '.[0] * { permissions: { allow: .[1].permissions.allow } }' \
+    "$target" "$template" > "$tmp" && mv "$tmp" "$target"
+  ok "  权限已同步（新增 $to_add，移除 $to_remove 条脏数据）"
 }
 
 
@@ -304,6 +342,117 @@ cmd_archive() {
   fi
 }
 
+cmd_update() {
+  info "更新 plume-skills（同步 skills、hooks、权限）..."
+  echo ""
+
+  if ! command -v jq &>/dev/null; then
+    err "需要 jq 来执行更新。请安装: sudo dnf install jq"
+    exit 1
+  fi
+
+  local settings_file="$HOME/.claude/settings.local.json"
+  local changes=0
+
+  # 1. 补齐 skills symlinks（新增的 skill 自动链接，已有的不动）
+  info "同步 skills symlinks..."
+  mkdir -p "$HOME/.claude/skills"
+  for skill in "${UNIVERSAL_PLUME_SKILLS[@]}"; do
+    local dest="$HOME/.claude/skills/$skill"
+    local src="$PLUME_ROOT/skills/$skill"
+    if [ ! -L "$dest" ] && [ ! -e "$dest" ]; then
+      if $DRY_RUN; then
+        info "  $skill — 将新增链接"
+      else
+        ln -sf "$src" "$dest"
+        ok "  $skill — 新增链接"
+      fi
+      changes=$((changes + 1))
+    elif [ -L "$dest" ]; then
+      local existing
+      existing="$(readlink -f "$dest" 2>/dev/null || true)"
+      local target_real
+      target_real="$(readlink -f "$src" 2>/dev/null || true)"
+      if [ "$existing" != "$target_real" ]; then
+        if $DRY_RUN; then
+          info "  $skill — 将更新链接（旧→ $existing）"
+        else
+          rm "$dest"
+          ln -sf "$src" "$dest"
+          ok "  $skill — 已更新链接"
+        fi
+        changes=$((changes + 1))
+      fi
+    fi
+  done
+  # brainstorming 通用版
+  local bs_dest="$HOME/.claude/skills/$UNIVERSAL_BRAINSTORMING_NAME"
+  local bs_src="$PLUME_ROOT/$UNIVERSAL_BRAINSTORMING_SRC"
+  if [ ! -L "$bs_dest" ] && [ ! -e "$bs_dest" ]; then
+    if ! $DRY_RUN; then ln -sf "$bs_src" "$bs_dest"; fi
+    ok "  $UNIVERSAL_BRAINSTORMING_NAME — 新增链接"
+    changes=$((changes + 1))
+  fi
+  # vendor skills
+  for entry in "${UNIVERSAL_VENDOR_SKILLS[@]}"; do
+    local rel_path="${entry%%:*}"
+    local name="${entry##*:}"
+    local src="$PLUME_ROOT/$rel_path"
+    local dest="$HOME/.claude/skills/$name"
+    if [ -d "$src" ] && [ -f "$src/SKILL.md" ] && [ ! -L "$dest" ] && [ ! -e "$dest" ]; then
+      if ! $DRY_RUN; then ln -sf "$src" "$dest"; fi
+      ok "  $name — 新增链接"
+      changes=$((changes + 1))
+    fi
+  done
+  if [ "$changes" -eq 0 ]; then
+    info "  所有 skills 已是最新"
+  fi
+
+  # 2. 同步 hooks（以 hooks.json 模板为准，完整替换 hooks 部分）
+  info "同步 hooks..."
+  if [ -f "$settings_file" ]; then
+    local hooks_resolved
+    hooks_resolved="$(sed "s|__PLUME_ROOT__|$PLUME_ROOT|g" "$PLUME_ROOT/hooks/hooks.json")"
+    local hooks_diff
+    hooks_diff="$(jq -s '
+      (.[0].hooks // {}) as $current |
+      (.[1].hooks // {}) as $template |
+      if $current == $template then "match" else "differ" end
+    ' "$settings_file" <(echo "$hooks_resolved") 2>/dev/null || echo "differ")"
+    if [ "$hooks_diff" = '"match"' ]; then
+      info "  hooks 已与模板一致"
+    else
+      if $DRY_RUN; then
+        info "  将更新 hooks 配置"
+      else
+        local tmp
+        tmp="$(mktemp)"
+        jq -s '.[0] * { hooks: .[1].hooks }' "$settings_file" <(echo "$hooks_resolved") > "$tmp" && mv "$tmp" "$settings_file"
+        ok "  hooks 已同步"
+      fi
+    fi
+  else
+    warn "  $settings_file 不存在，请先执行 --universal 安装"
+  fi
+
+  # 3. 同步权限（默认只增不删；--clean-permissions 时精确同步）
+  if $CLEAN_PERMS; then
+    info "同步权限（精确模式：以模板为准，清理非模板条目）..."
+    sync_json_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
+  else
+    info "同步权限（增量模式：仅补入模板新增项）..."
+    merge_json_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
+  fi
+
+  # 4. 更新 plume_root
+  info "更新配置..."
+  write_plume_root
+  echo ""
+
+  ok "更新完成。Skills 内容通过 symlink 自动生效，无需额外操作。"
+}
+
 cmd_repair() {
   info "修复 plume-skills 路径引用..."
   echo ""
@@ -385,6 +534,8 @@ plume-skills 部署器
 用法:
   ./install.sh --universal [--dry-run]       部署通用 skills 到 ~/.claude/
   ./install.sh --project [path] [--dry-run]  部署项目 skills 到 <path>/.claude/
+  ./install.sh --update [--dry-run]          同步 skills/hooks/权限到最新状态
+  ./install.sh --update --clean-permissions  同步 + 清理非模板权限条目
   ./install.sh --repair                      修复搬迁后的路径引用
   ./install.sh archive <keyword|--all>       归档项目数据用于迁移
   ./install.sh --help                        显示帮助
@@ -404,8 +555,10 @@ while [[ $# -gt 0 ]]; do
                   if [ "${1:-}" ] && [[ ! "$1" =~ ^-- ]]; then
                     PROJECT_PATH="$1"; shift
                   fi ;;
+    --update)     CMD="update"; shift ;;
     --repair)     CMD="repair"; shift ;;
     archive)      CMD="archive"; shift; ARCHIVE_PATTERN="${1:---all}"; shift 2>/dev/null || true ;;
+    --clean-permissions) CLEAN_PERMS=true; shift ;;
     --dry-run)    DRY_RUN=true; shift ;;
     --help|-h)    usage; exit 0 ;;
     *)            err "未知选项: $1"; usage; exit 1 ;;
@@ -420,6 +573,7 @@ fi
 case "$CMD" in
   universal) cmd_universal ;;
   project)   cmd_project "$PROJECT_PATH" ;;
+  update)    cmd_update ;;
   repair)    cmd_repair ;;
   archive)   cmd_archive "$ARCHIVE_PATTERN" ;;
 esac

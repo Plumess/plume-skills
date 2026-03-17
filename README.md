@@ -191,12 +191,13 @@ flowchart TD
 |------|------|
 | `./install.sh --universal` | 6 个通用 skills + 3 个 hooks + 权限模板 → `~/.claude/` |
 | `./install.sh --project <path>` | 12 个工作流 skills + 权限 → `<project>/.claude/` |
+| `./install.sh --update` | 一键同步：补齐新 skills、更新 hooks、增量合并权限 |
+| `./install.sh --update --clean-permissions` | 同上 + 清理非模板权限条目（会话中累积的脏数据） |
 | `./install.sh --repair` | 搬迁目录后修复 symlinks、hook 路径、config |
-| `./install.sh archive <keyword>` | 归档匹配的项目数据 |
-| `./install.sh archive --all` | 归档全部数据 |
-| `./install.sh --dry-run` | 预览不执行（搭配 --universal 或 --project） |
+| `./install.sh archive <keyword\|--all>` | 归档项目数据 |
+| `./install.sh --dry-run` | 预览不执行（搭配 --universal / --project / --update） |
 
-所有部署**幂等** — 重复执行无副作用。
+所有部署**幂等** — 重复执行无副作用。更新 skills 内容后执行 `--update` 即可一键同步。
 
 ## Wrapper 模式
 
