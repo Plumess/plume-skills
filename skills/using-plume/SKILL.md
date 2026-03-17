@@ -65,7 +65,7 @@ Think before you act. Follow this progression:
 ## Context Survival
 
 **Save triggers** — Call `context-keeper` SAVE only when:
-1. **`[CONTEXT-SAVE-URGENT]`**: PreCompact hook detected compact imminent. Save NOW — highest priority.
+1. **`[CONTEXT-SAVE-URGENT]`**: PreCompact blocked compact. Save NOW — next compact attempt will not block.
 2. **`[CONTEXT-SAVE-RECOMMENDED]`**: hook counter reached ≥15 messages since last save. Save immediately.
 3. **User explicit request**: "保存上下文", "save context", etc.
 4. Never save "just because" — no per-turn or per-phase auto-saves.

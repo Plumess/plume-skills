@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# plume-skills PreCompact hook
-# Two duties:
-# 1. Inject [CONTEXT-SAVE-URGENT] so Claude saves before compact truncates context
-# 2. Write marker file so user-prompt-submit can inject recovery after compact
+# plume-skills PreCompact hook — Layer 1 of three-layer compact protection
+#
+# First attempt:  block compact + write .save-pending marker
+#                 → UserPromptSubmit injects [CONTEXT-SAVE-URGENT] on next message
+#                 → Claude saves context before compact proceeds
+# Second attempt: .save-pending still exists → allow compact + write .compact-marker
+#                 → UserPromptSubmit injects [CONTEXT-RECOVERY] for post-compact restore
 
 set -euo pipefail
 
@@ -26,27 +29,31 @@ if [ -z "$CWD" ]; then
 fi
 
 SLUG="$(echo "$CWD" | sed 's|^/||; s|/|-|g')"
-MARKER_DIR="$PLUME_ROOT/data"
-MARKER="$MARKER_DIR/.compact-marker"
+DATA_DIR="$PLUME_ROOT/data"
+SAVE_PENDING="$DATA_DIR/.save-pending"
+COMPACT_MARKER="$DATA_DIR/.compact-marker"
 
-mkdir -p "$MARKER_DIR"
+mkdir -p "$DATA_DIR"
 
-# Write marker with slug and timestamp (for post-compact recovery)
-cat > "$MARKER" <<EOF
+if [ -f "$SAVE_PENDING" ]; then
+  # Second compact attempt — save didn't happen in time.
+  # Allow compact to proceed; write recovery marker for post-compact restore.
+  rm -f "$SAVE_PENDING"
+  cat > "$COMPACT_MARKER" <<EOF
 slug=$SLUG
 timestamp=$(date -u +%Y-%m-%dT%H-%M)
 cwd=$CWD
 EOF
-
-# Inject urgent save signal into context (Claude will save before compact proceeds)
-MSG="[CONTEXT-SAVE-URGENT] Compact is imminent. Call context-keeper SAVE immediately — this is the last chance before context is truncated."
-
-ESCAPED="$(printf '%s' "$MSG" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' 2>/dev/null || printf '%s' "$MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | awk '{printf "%s\\n", $0}')"
-
-cat <<EOF
-{
-  "hookSpecificOutput": {
-    "additionalContext": $ESCAPED
-  }
-}
+  echo '{}'
+else
+  # First compact attempt — block compact, write .save-pending marker.
+  # UserPromptSubmit will inject [CONTEXT-SAVE-URGENT] on the next user message.
+  cat > "$SAVE_PENDING" <<EOF
+slug=$SLUG
+timestamp=$(date -u +%Y-%m-%dT%H-%M)
+cwd=$CWD
 EOF
+  cat <<'EOF'
+{"decision": "block", "reason": "Blocking compact to allow context-keeper save first."}
+EOF
+fi

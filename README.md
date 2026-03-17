@@ -131,7 +131,7 @@ flowchart TD
 
 1. **用户请求** — 「保存上下文」/ "save context"
 2. **消息计数** — 累计 ≥15 轮后 hook 注入 `[CONTEXT-SAVE-RECOMMENDED]`（阈值可配置）
-3. **PreCompact hook** — compact 即将发生时，hook 注入 `[CONTEXT-SAVE-URGENT]`，Claude 立即执行保存后再进入 compact
+3. **PreCompact 拦截** — compact 首次触发时 hook 阻断并写入 `.save-pending`，下一条用户消息注入 `[CONTEXT-SAVE-URGENT]`，Claude 完成保存后才放行 compact
 
 ### Segment 结构
 

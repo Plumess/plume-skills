@@ -63,6 +63,13 @@ except:
   fi
 fi
 
+# --- Part 0.5: Pre-compact save signal ---
+# PreCompact hook blocked compact and wrote .save-pending — inject URGENT save signal
+SAVE_PENDING="$PLUME_ROOT/data/.save-pending"
+if [ -f "$SAVE_PENDING" ]; then
+  CONTEXT_PARTS+=("[CONTEXT-SAVE-URGENT] Compact was blocked to allow saving. Call context-keeper SAVE immediately — next compact attempt will proceed without blocking.")
+fi
+
 # --- Part 1: Compact recovery ---
 if [ -f "$MARKER" ]; then
   SLUG=""

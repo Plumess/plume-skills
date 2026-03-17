@@ -20,7 +20,7 @@ Read `$PLUME_ROOT/config.yml` → `locale.timezone` and `locale.language`.
 ## Detect Mode
 
 - `[CONTEXT-RECOVERY]` in current context → **RESTORE**
-- `[CONTEXT-SAVE-URGENT]` in current context → **SAVE** (compact imminent, highest priority)
+- `[CONTEXT-SAVE-URGENT]` in current context → **SAVE** (compact was blocked, save before next attempt)
 - `[CONTEXT-SAVE-RECOMMENDED]` in current context → **SAVE** (message count threshold reached)
 - Otherwise → **SAVE** (user explicit request)
 
@@ -61,7 +61,7 @@ Example: `/home/plume/myproject` → `home-plume-myproject`
 
 ### When to Save
 
-- **`[CONTEXT-SAVE-URGENT]` signal**: PreCompact hook detected compact is imminent. Save NOW — this is the last chance before context is truncated. Highest priority.
+- **`[CONTEXT-SAVE-URGENT]` signal**: PreCompact hook blocked compact and wrote `.save-pending` marker. UserPromptSubmit injected this signal. Save NOW — next compact attempt will proceed without blocking.
 - **`[CONTEXT-SAVE-RECOMMENDED]` signal**: injected by hook after ≥15 user messages since last save. Save immediately — do NOT defer.
 - **User explicit request**: "保存上下文", "save context", etc.
 
@@ -166,11 +166,13 @@ This is an incremental append — never rewrite the entire file for a single sav
 
 Tell user: "Context saved — segment `[timestamp]`, index rebuilt. [N] segments total."
 
-**Step 8 — Reset save counter**
+**Step 8 — Reset counters and clear save-pending marker**
 ```bash
 echo "0" > "$PLUME_ROOT/data/$slug/.msg-count"
+rm -f "$PLUME_ROOT/data/.save-pending"
 ```
 This resets the hook message counter so `[CONTEXT-SAVE-RECOMMENDED]` won't fire until another 15 messages.
+Removing `.save-pending` tells the PreCompact hook that saving succeeded — the next compact will be blocked again (buying another save opportunity) instead of proceeding immediately.
 
 ### Verification Gate
 
