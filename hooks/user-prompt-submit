@@ -29,6 +29,9 @@ SLUG="$(echo "$CWD" | sed 's|^/||; s|/|-|g')"
 
 CONTEXT_PARTS=()
 
+# --- Always: inject PLUME_ROOT so Claude knows the correct base path ---
+CONTEXT_PARTS+=("[PLUME_ROOT: $PLUME_ROOT]")
+
 # --- Part 0: Save counter (message counting for auto-save reminder) ---
 COUNTER_FILE="$PLUME_ROOT/data/$SLUG/.msg-count"
 if [ -d "$PLUME_ROOT/data/$SLUG" ]; then
