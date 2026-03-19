@@ -5,3 +5,6 @@ data/
 .DS_Store
 *.swp
 *~
+
+# docs
+progress.md

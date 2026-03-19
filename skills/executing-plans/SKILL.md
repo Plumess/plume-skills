@@ -6,11 +6,10 @@ description: "Use when you have a written implementation plan to execute in a se
 <PLUME-OVERRIDE>
 The following directives take priority over the vendor skill. Anything not mentioned here follows the vendor skill as-is.
 
-- Plan file location: `$PLUME_ROOT/data/<slug>/plans/` (NOT `docs/superpowers/plans/`)
-  - `<slug>` = current working directory with leading `/` removed, `/` replaced by `-`
-  - `PLUME_ROOT` from `[PLUME_ROOT: ...]` in session context
+- Plan file location: `<project-root>/docs/plume-skills/plans/`
+  - `<project-root>` = current working directory (the project being worked on)
   - When the vendor skill references plan files, look in this directory instead
-- Design spec location: `$PLUME_ROOT/data/<slug>/specs/` (for cross-referencing approved designs)
+- Design spec location: `<project-root>/docs/plume-skills/specs/` (for cross-referencing approved designs)
 </PLUME-OVERRIDE>
 
 Now read and follow the vendor skill's complete content:

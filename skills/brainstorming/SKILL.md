@@ -7,11 +7,10 @@ description: "You MUST use this before any creative work - creating features, bu
 The following directives take priority over the vendor skill. Anything not mentioned here follows the vendor skill as-is.
 
 - **Locale**: Read `$PLUME_ROOT/config.yml` → `locale.language`. Write spec documents in this language. Timestamps use `locale.timezone`.
-- **Output path**: `$PLUME_ROOT/data/<slug>/specs/YYYY-MM-DD-<topic>-design.md`
-  - `<slug>` = current working directory with leading `/` removed, `/` replaced by `-`
-  - `PLUME_ROOT` from `[PLUME_ROOT: ...]` in session context
-  - Create `specs/` directory if it doesn't exist
-  - Do NOT write to `docs/superpowers/` or `docs/plume/` — all output goes to `data/<slug>/`
+- **Output path**: `<project-root>/docs/plume-skills/specs/YYYY-MM-DD-<topic>-design.md`
+  - `<project-root>` = current working directory (the project being worked on)
+  - Create `docs/plume-skills/specs/` directory if it doesn't exist
+  - Do NOT write to `docs/superpowers/` or `docs/plume/`
 - **Gate**: After spec review is complete: STOP and wait for explicit user approval before proceeding to writing-plans or any implementation. Do NOT auto-transition.
 - If the user says "looks good" or "approved", only then proceed to the next phase.
 </PLUME-OVERRIDE>

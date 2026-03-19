@@ -8,10 +8,9 @@ The following directives take priority over the vendor skill. Anything not menti
 
 - **Activation**: This is the universal (non-project) version. Only activate when the user explicitly asks.
 - **Locale**: Read `$PLUME_ROOT/config.yml` → `locale.language`. Write spec documents in this language. Timestamps use `locale.timezone`.
-- **Output path**: `$PLUME_ROOT/data/<slug>/specs/YYYY-MM-DD-<topic>-design.md`
-  - `<slug>` = current working directory with leading `/` removed, `/` replaced by `-`
-  - `PLUME_ROOT` from `[PLUME_ROOT: ...]` in session context
-  - Create `specs/` directory if it doesn't exist
+- **Output path**: `<project-root>/docs/plume-skills/specs/YYYY-MM-DD-<topic>-design.md`
+  - `<project-root>` = current working directory (the project being worked on)
+  - Create `docs/plume-skills/specs/` directory if it doesn't exist
   - Do NOT write to `docs/superpowers/` or `docs/plume/`
 - **Gate**: After spec review is complete: STOP and wait for explicit user approval.
 </PLUME-OVERRIDE>

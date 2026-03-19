@@ -1,105 +1,91 @@
 #!/usr/bin/env bash
 # plume-skills UserPromptSubmit hook
-# Two functions:
-# 1. Compact recovery: detect .compact-marker → inject [CONTEXT-RECOVERY]
-# 2. Digest auto-sense: near remind_at + scoped segments → inject [DIGEST-HINT] or [DIGEST-AUTO]
+# Functions:
+# 1. Always: inject PLUME_ROOT
+# 2. Pre-compact save: .save-pending-<session> → [CONTEXT-SAVE-URGENT]
+# 3. Compact recovery: .compact-marker-<session> → [CONTEXT-RECOVERY]
+# 4. Digest auto-sense: time-gated, only near remind_at → [DIGEST-HINT] or [DIGEST-AUTO]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUME_ROOT="$(dirname "$SCRIPT_DIR")"
-MARKER="$PLUME_ROOT/data/.compact-marker"
 CONFIG="$PLUME_ROOT/config.yml"
 
-# Read cwd from hook input (JSON on stdin)
+# Read hook input
 HOOK_INPUT=""
 if [ ! -t 0 ]; then
   HOOK_INPUT="$(cat)"
 fi
 
 CWD=""
+SESSION_ID=""
 if [ -n "$HOOK_INPUT" ]; then
   CWD="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd",""))' 2>/dev/null || true)"
+  SESSION_ID="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("session_id","")[:8])' 2>/dev/null || true)"
 fi
 if [ -z "$CWD" ]; then
   CWD="$(pwd)"
 fi
+if [ -z "$SESSION_ID" ]; then
+  SESSION_ID="unknown"
+fi
 
-SLUG="$(echo "$CWD" | sed 's|^/||; s|/|-|g')"
+SLUG="$(echo "$CWD" | sed 's|/|-|g')"
+CLAUDE_PROJECTS="$HOME/.claude/projects"
 
 CONTEXT_PARTS=()
 
-# --- Always: inject PLUME_ROOT so Claude knows the correct base path ---
+# --- Always: inject PLUME_ROOT ---
 CONTEXT_PARTS+=("[PLUME_ROOT: $PLUME_ROOT]")
 
-# --- Part 0: Save counter (message counting for auto-save reminder) ---
-COUNTER_FILE="$PLUME_ROOT/data/$SLUG/.msg-count"
-if [ -d "$PLUME_ROOT/data/$SLUG" ]; then
-  CURRENT_COUNT=0
-  if [ -f "$COUNTER_FILE" ]; then
-    CURRENT_COUNT="$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)"
-    # Sanitize
-    CURRENT_COUNT="${CURRENT_COUNT//[!0-9]/}"
-    [ -z "$CURRENT_COUNT" ] && CURRENT_COUNT=0
-  fi
-  CURRENT_COUNT=$(( CURRENT_COUNT + 1 ))
-  echo "$CURRENT_COUNT" > "$COUNTER_FILE"
-
-  # Read threshold from config (default 15)
-  SAVE_THRESHOLD=15
-  if [ -f "$CONFIG" ]; then
-    CFG_THRESHOLD="$(python3 -c "
-import yaml
-try:
-    c = yaml.safe_load(open('$CONFIG'))
-    print(c.get('context', {}).get('save_remind_after', 15))
-except:
-    print(15)
-" 2>/dev/null || echo 15)"
-    SAVE_THRESHOLD="${CFG_THRESHOLD//[!0-9]/}"
-    [ -z "$SAVE_THRESHOLD" ] && SAVE_THRESHOLD=15
-  fi
-
-  if [ "$CURRENT_COUNT" -ge "$SAVE_THRESHOLD" ]; then
-    CONTEXT_PARTS+=("[CONTEXT-SAVE-RECOMMENDED] $CURRENT_COUNT messages since last save. Call context-keeper to save now.")
-    # Don't reset here — context-keeper SAVE step 8 resets it after successful save
-  fi
-fi
-
-# --- Part 0.5: Pre-compact save signal ---
-# PreCompact hook blocked compact and wrote .save-pending — inject URGENT save signal
-SAVE_PENDING="$PLUME_ROOT/data/.save-pending"
+# --- Pre-compact save signal (session-scoped) ---
+SAVE_PENDING="$PLUME_ROOT/data/.save-pending-$SESSION_ID"
 if [ -f "$SAVE_PENDING" ]; then
   CONTEXT_PARTS+=("[CONTEXT-SAVE-URGENT] Compact was blocked to allow saving. Call context-keeper SAVE immediately — next compact attempt will proceed without blocking.")
 fi
 
-# --- Part 1: Compact recovery ---
-if [ -f "$MARKER" ]; then
-  SLUG=""
+# --- Compact recovery (session-scoped) ---
+COMPACT_MARKER="$PLUME_ROOT/data/.compact-marker-$SESSION_ID"
+if [ -f "$COMPACT_MARKER" ]; then
+  MARKER_SLUG=""
   while IFS='=' read -r key value; do
     case "$key" in
-      slug) SLUG="$value" ;;
+      slug) MARKER_SLUG="$value" ;;
     esac
-  done < "$MARKER"
+  done < "$COMPACT_MARKER"
 
-  rm -f "$MARKER"
+  rm -f "$COMPACT_MARKER"
 
-  if [ -n "$SLUG" ]; then
-    LATEST="$PLUME_ROOT/data/$SLUG/LATEST.md"
-    CONTEXT_PARTS+=("[CONTEXT-RECOVERY] Session was compacted. Restore task state now.
-- Index file: $LATEST
-- Segments dir: $PLUME_ROOT/data/$SLUG/segments/
+  CONTEXT_DIR="$CLAUDE_PROJECTS/$MARKER_SLUG/plume-context"
+  CONTEXT_PARTS+=("[CONTEXT-RECOVERY] Session was compacted. Restore task state now.
+- Context dir: $CONTEXT_DIR
+- CONTEXT-INDEX: $CONTEXT_DIR/CONTEXT-INDEX.md
 - Call the context-keeper skill to restore.")
-  fi
 fi
 
-# --- Part 2: Digest auto-sense ---
-# Only run if no compact recovery (don't mix signals)
-if [ ${#CONTEXT_PARTS[@]} -eq 0 ]; then
+# --- Digest auto-sense (time-gated: only near remind_at) ---
+# Skip entirely if compact signals are active
+if [ ! -f "$SAVE_PENDING" ] && [ ! -f "$COMPACT_MARKER" ]; then
 
-  # Read config values via python
-  DIGEST_CFG="$(python3 -c "
-import yaml, sys
+  # Quick time check FIRST — skip all config parsing if not near any remind time
+  NOW_MIN=$(( $(date +%H) * 60 + $(date +%-M) ))
+
+  # Default remind times: 09:00 and 18:00 (540 and 1080 minutes)
+  # Only parse config if we're roughly near these defaults (±90 min buffer)
+  MIGHT_BE_NEAR=false
+  for DEFAULT_RT in 540 1080; do
+    DIFF=$(( NOW_MIN - DEFAULT_RT ))
+    [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
+    if [ "$DIFF" -le 90 ]; then
+      MIGHT_BE_NEAR=true
+      break
+    fi
+  done
+
+  if [ "$MIGHT_BE_NEAR" = true ] && [ -f "$CONFIG" ]; then
+    DIGEST_CFG="$(python3 -c "
+import yaml
 try:
     c = yaml.safe_load(open('$CONFIG'))
     d = c.get('digest', {})
@@ -111,68 +97,60 @@ except:
     pass
 " 2>/dev/null || true)"
 
-  DEFAULT_SCOPE=""
-  AUTO_GENERATE="False"
-  REMIND_TIMES=()
+    DEFAULT_SCOPE=""
+    AUTO_GENERATE="False"
+    REMIND_TIMES=()
 
-  while IFS= read -r line; do
-    if [[ "$line" == remind:* ]]; then
-      REMIND_TIMES+=("${line#remind:}")
-    elif [ -z "$DEFAULT_SCOPE" ]; then
-      DEFAULT_SCOPE="$line"
-    elif [ "$AUTO_GENERATE" = "False" ]; then
-      AUTO_GENERATE="$line"
-    fi
-  done <<< "$DIGEST_CFG"
+    while IFS= read -r line; do
+      if [[ "$line" == remind:* ]]; then
+        REMIND_TIMES+=("${line#remind:}")
+      elif [ -z "$DEFAULT_SCOPE" ]; then
+        DEFAULT_SCOPE="$line"
+      elif [ "$AUTO_GENERATE" = "False" ]; then
+        AUTO_GENERATE="$line"
+      fi
+    done <<< "$DIGEST_CFG"
 
-  # Check time window: are we near a remind_at time? (±60 min)
-  IN_WINDOW=false
-  NOW_MIN=$(( $(date +%H) * 60 + $(date +%-M) ))
+    # Precise time window check (±60 min)
+    IN_WINDOW=false
+    for rtime in "${REMIND_TIMES[@]}"; do
+      RHOUR="${rtime%%:*}"
+      RMIN="${rtime##*:}"
+      RTOTAL=$(( 10#$RHOUR * 60 + 10#$RMIN ))
+      DIFF=$(( NOW_MIN - RTOTAL ))
+      [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
+      if [ "$DIFF" -le 60 ]; then
+        IN_WINDOW=true
+        break
+      fi
+    done
 
-  for rtime in "${REMIND_TIMES[@]}"; do
-    RHOUR="${rtime%%:*}"
-    RMIN="${rtime##*:}"
-    RTOTAL=$(( 10#$RHOUR * 60 + 10#$RMIN ))
-    DIFF=$(( NOW_MIN - RTOTAL ))
-    [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
-    if [ "$DIFF" -le 60 ]; then
-      IN_WINDOW=true
-      break
-    fi
-  done
+    if [ "$IN_WINDOW" = true ] && [ -n "$DEFAULT_SCOPE" ]; then
+      TODAY="$(date +%Y-%m-%d)"
+      JOURNAL="$PLUME_ROOT/data/journal/${TODAY}.md"
+      HINT_MARKER="$PLUME_ROOT/data/.digest-hint-$TODAY"
 
-  if [ "$IN_WINDOW" = true ] && [ -n "$DEFAULT_SCOPE" ]; then
-    TODAY="$(date +%Y-%m-%d)"
-    JOURNAL="$PLUME_ROOT/data/journal/${TODAY}.md"
-
-    # One-shot marker per day
-    HINT_MARKER="$PLUME_ROOT/data/.digest-hint-$TODAY"
-
-    if [ ! -f "$JOURNAL" ] && [ ! -f "$HINT_MARKER" ]; then
-      # Count today's segments across all scoped projects
-      SEG_COUNT=0
-      for dir in "$PLUME_ROOT/data/"*; do
-        [ ! -d "$dir/segments" ] && continue
-        dirname="$(basename "$dir")"
-        case "$dirname" in
-          journal|reports|archives) continue ;;
-        esac
-        # Check scope match
-        if echo "$dirname" | grep -q "$DEFAULT_SCOPE"; then
-          count="$(ls "$dir/segments/" 2>/dev/null | grep -c "^${TODAY}" || true)"
-          SEG_COUNT=$(( SEG_COUNT + count ))
+      if [ ! -f "$JOURNAL" ] && [ ! -f "$HINT_MARKER" ]; then
+        HAS_ACTIVITY=false
+        if [ -d "$CLAUDE_PROJECTS" ]; then
+          for projdir in "$CLAUDE_PROJECTS"/*/; do
+            dirname="$(basename "$projdir")"
+            if echo "$dirname" | grep -qi "$DEFAULT_SCOPE"; then
+              if find "$projdir" -maxdepth 1 -name "*.jsonl" -newermt "$TODAY" -print -quit 2>/dev/null | grep -q .; then
+                HAS_ACTIVITY=true
+                break
+              fi
+            fi
+          done
         fi
-      done
 
-      if [ "$SEG_COUNT" -ge 1 ]; then
-        touch "$HINT_MARKER"
-        if [ "$AUTO_GENERATE" = "True" ]; then
-          CONTEXT_PARTS+=("[DIGEST-AUTO] Auto-generate daily report now.
-- Scope: $DEFAULT_SCOPE
-- Segments today: $SEG_COUNT
-- Run: /digest daily (use default scope from config)")
-        else
-          CONTEXT_PARTS+=("[DIGEST-HINT] $SEG_COUNT work segments today (scope: $DEFAULT_SCOPE), no daily report yet.")
+        if [ "$HAS_ACTIVITY" = true ]; then
+          touch "$HINT_MARKER"
+          if [ "$AUTO_GENERATE" = "True" ]; then
+            CONTEXT_PARTS+=("[DIGEST-AUTO] Auto-generate daily report now. Scope: $DEFAULT_SCOPE")
+          else
+            CONTEXT_PARTS+=("[DIGEST-HINT] Active sessions today (scope: $DEFAULT_SCOPE), no daily report yet.")
+          fi
         fi
       fi
     fi

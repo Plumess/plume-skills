@@ -1,6 +1,6 @@
 # 日报 YYYY-MM-DD
 <!-- scope: scope-keyword -->
-<!-- segments: N (ProjectA: X, ProjectB: Y) -->
+<!-- sessions: N (ProjectA: X, ProjectB: Y) -->
 
 ## 今日成果
 1. [项目简称] 一句话概括成果
@@ -30,7 +30,7 @@ TEMPLATE NOTES
   - 单项目时省略 [项目简称] 前缀
   - 关键决策只写结论和原因，不展开讨论过程
   - 技术细节点到为止，不贴大段代码
-- **明日计划**: 从最新 segment 的 Next Step / Open Questions 提取
+- **明日计划**: 从最新 session snapshot 的 Current State / Open Questions 提取
 - 所有章节必填，无内容写"无"
 - 文件已存在时智能合并（见 digest SKILL.md 说明）
 -->

@@ -29,7 +29,7 @@ WRAPPER 编写指南
    - 暂无定制时写 "No overrides yet. Follow the vendor skill as-is."
    - 有定制时写具体覆盖规则，vendor 未提及的部分不受影响
    - 常见覆盖场景：
-     - 输出路径（如 $PLUME_ROOT/data/<slug>/specs/ 替代 docs/superpowers/）
+     - 输出路径（如 `<project-root>/docs/plume-skills/specs/` 替代 `docs/superpowers/`）
      - 流程门控（如 spec review 后等待用户确认）
      - 粒度要求（如任务拆分到半天可完成）
      - 触发条件变更（如仅显式请求时激活）

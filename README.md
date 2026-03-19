@@ -18,8 +18,8 @@
 **核心特点**：
 
 - **Wrapper 定制** — 不修改 vendor 原文，通过 `<PLUME-OVERRIDE>` 按需覆盖输出路径、流程门控、locale 等
-- **Context Keeper** — 自研。三层 compact 保护，自动恢复工作状态，不丢一个决策
-- **Digest** — 自研。基于 Claude 对话内容的跨项目日报一键生成，研究报告自然语言触发，scope 隔离非指定项目的对话隐私
+- **Context Keeper** — 自研。双保险 compact 保护，基于 Claude 原生数据的全会话历史索引
+- **Digest** — 自研。从 Claude 原生会话数据生成跨项目日报，研究报告自然语言触发，scope 隔离隐私
 
 ## 快速开始
 
@@ -55,147 +55,98 @@ plume-skills/
 │   ├── find-skills/                  #   vercel-labs/skills
 │   └── skill-creator/                #   anthropics/skills
 │
-├── hooks/                            # SessionStart / PreCompact / UserPromptSubmit
+├── hooks/                            # PreCompact / UserPromptSubmit
 ├── templates/                        # wrapper / 报告 / git-plan 模板
-├── config.yml                        # 全局配置（locale、scope、tags 等）
-├── install.sh                        # 部署器（幂等）
+├── config.yml                        # 全局配置（locale、scope）
+├── install.sh                        # 部署器（幂等，支持 --update 一键同步）
 └── data/                             # 运行时数据（gitignored）
     ├── journal/                      #   日报（跨项目）
-    ├── reports/                      #   研究报告
-    └── <slug>/                       #   项目级工作数据
-        ├── segments/                 #     上下文时间线
-        ├── LATEST.md                 #     轻量索引（≤400 token）
-        ├── tags-index.md             #     标签倒排索引
-        ├── specs/                    #     设计文档
-        └── plans/                    #     实施计划
+    └── reports/                      #   研究报告
 ```
 
-## Skills 一览
+**上下文数据**存储在 Claude 项目目录 `~/.claude/projects/<slug>/plume-context/`，不在 plume-skills 内。
 
-### 通用 Skills &nbsp; `--universal` → `~/.claude/skills/`
-
-| Skill | 类型 | 说明 |
-|-------|:----:|------|
-| **using-plume** | 自研 | 框架引导，SessionStart hook 自动注入 |
-| **context-keeper** | 自研 | 保存/恢复会话上下文，三层 compact 保护 |
-| **digest** | 自研 | 日报（`/digest daily`）+ 研究报告（`/digest report`） |
-| **brainstorming** | wrapper | 结构化设计探索，显式请求触发 |
-| **find-skills** | 社区 | 发现和安装社区 skills |
-| **skill-creator** | 社区 | 从零创建自定义 skills |
-
-### 项目 Skills &nbsp; `--project` → `<project>/.claude/skills/`
-
-| Skill | 说明 |
-|-------|------|
-| **brainstorming** | 严格自动触发（遮盖通用版） |
-| **writing-plans** | 设计 → 可执行实施计划 |
-| **executing-plans** | 按计划逐步执行 |
-| **subagent-driven-development** | 多任务子代理协调 |
-| **dispatching-parallel-agents** | 并行任务调度 |
-| **test-driven-development** | TDD 红绿重构循环 |
-| **systematic-debugging** | 根因分析优先的系统化调试 |
-| **requesting-code-review** | 请求代码审查 |
-| **receiving-code-review** | 响应审查意见 |
-| **verification-before-completion** | 完成前的证据验证 |
-| **finishing-a-development-branch** | 分支收尾 + Git 操作方案展示 |
-| **using-git-worktrees** | Git worktree 隔离开发 |
+**项目产出**（specs、plans）存储在各项目的 `docs/plume-skills/` 下。
 
 ## Context Keeper
 
-> Claude Code 长会话触发 compact 时丢失工作状态。context-keeper 用三层保护解决这个问题。
+> Claude Code 长会话触发 compact 时丢失工作状态。context-keeper 用双保险机制解决这个问题，基于 Claude 原生 jsonl 会话记录，只维护索引层（session snapshots + CONTEXT-INDEX.md）。
 
-### 三层保护
+### 双保险 Compact 保护
 
 ```mermaid
 flowchart TD
-    A["Compact 即将发生"] --> B["Layer 1: PreCompact Hook"]
-    B -->|"写入 marker 文件"| C["Compact 执行"]
-    C --> D{"marker 存在?"}
-    D -->|Yes| E["Layer 2: UserPromptSubmit Hook"]
-    E -->|"注入 [CONTEXT-RECOVERY]"| F["Claude 读取 LATEST.md 索引"]
-    F --> G["自动恢复工作状态"]
-    D -->|"No (hook 未触发)"| H{"[PLUME_ROOT] 在上下文中?"}
-    H -->|Missing| I["Layer 3: Fallback"]
-    I -->|"从 symlink/settings 推导路径"| F
-    H -->|Present| J["正常工作，无需恢复"]
+    A["Compact 即将发生"] --> B{"PreCompact Hook"}
+    B -->|"首次: block + .save-pending"| C["下一条消息"]
+    C --> D["UserPromptSubmit 注入 URGENT"]
+    D --> E["Claude 用完整上下文写快照 (001)"]
+    E --> F["清除 .save-pending，compact 下次正常执行"]
+    B -->|"二次: .save-pending 仍在 → 放行"| G["Compact 执行"]
+    G --> H["UserPromptSubmit 注入 RECOVERY"]
+    H --> I["Claude 捕获 compact 摘要为快照 (002)"]
+    I --> J["恢复工作状态"]
 
-    style B fill:#4a9eff,color:#fff
-    style E fill:#4a9eff,color:#fff
+    style E fill:#10b981,color:#fff
     style I fill:#f59e0b,color:#fff
-    style G fill:#10b981,color:#fff
+    style J fill:#10b981,color:#fff
 ```
 
-### 保存策略
+- **001 快照**（PreCompact 成功拦截）：完整上下文，最高质量
+- **002 快照**（compact 已执行）：compact 摘要，质量次之但完全可靠
+- 恢复时优先读最小序号（最高质量）
 
-不在每个阶段自动保存（避免浪费 token），三种触发方式：
+### 清理
 
-1. **用户请求** — 「保存上下文」/ "save context"
-2. **消息计数** — 累计 ≥15 轮后 hook 注入 `[CONTEXT-SAVE-RECOMMENDED]`（阈值可配置）
-3. **PreCompact 拦截** — compact 首次触发时 hook 阻断并写入 `.save-pending`，下一条用户消息注入 `[CONTEXT-SAVE-URGENT]`，Claude 完成保存后才放行 compact
+当快照 + jsonl 数据量超过配置阈值（默认 500MB）时，`context-keeper cleanup` 按"最久未更新"和"最大体积"推荐清理候选，支持一键删除或选择性删除。永远不删 MEMORY.md。
 
-### Segment 结构
+### 存储
 
-每次保存生成 `data/<slug>/segments/YYYY-MM-DDTHH-MM.md`：
-
-| 字段 | 内容 |
-|------|------|
-| Summary | 本阶段完成了什么 |
-| Artifacts | 创建/修改的文件（含 specs、plans） |
-| Decisions | 关键决策及理由 |
-| Tags | `category:value` 格式，供 digest 检索 |
-
-**LATEST.md** 是轻量索引（≤400 token）：当前任务、下一步、segment 索引表。恢复时只读索引，按需加载细节。
-
-**Tags 约束**：`config.yml` 中可配置词表（`tech` / `module` / `activity` / `ref`），确保跨 segment 检索一致性。
+```
+~/.claude/projects/<slug>/plume-context/
+├── CONTEXT-INDEX.md         # 全历史时间线索引（≤1500 tokens）
+└── sessions/                # 每次 compact 的快照
+    ├── <id>-001.md          # PreCompact 快照（完整上下文）
+    └── <id>-002.md          # Post-compact 快照（compact 摘要）
+```
 
 ## Digest
 
-> 消费 context-keeper 的 segments，聚合为日报或研究报告。
+> 从 Claude 原生数据（jsonl + session snapshots + MEMORY.md）生成日报和研究报告。
 
 ### 日报
 
 ```bash
 /digest daily                         # 今日日报（default_scope）
 /digest daily 2026-03-15              # 指定日期
-/digest daily --scope edgeexploration # 指定作用域
+/digest daily --scope edge-exploration # 指定作用域
 ```
 
-- **一天一份，跨项目聚合** — scope 下所有项目当天工作
-- **Scope 隔离** — slug 子串匹配，公司项目与个人项目天然分离
-- **自动生成** — `auto_generate: true` + `remind_at` 时间窗口内 + ≥3 segments → 自动执行
+- **一天一份，跨项目聚合** — scope 下所有项目当天活跃会话
+- **数据源优先级** — session snapshots > CONTEXT-INDEX.md > jsonl 尾部
+- **Scope 隔离** — Claude 原生目录名子串匹配，公司与个人项目天然分离
 - **输出** — `data/journal/YYYY-MM-DD.md`
 
 ### 研究报告
 
 ```bash
-/digest report 用户认证相关的工作      # 自然语言，语义匹配 tags
-/digest report auth                    # tag 关键词
-/digest report                         # 展示 tag 聚类供选择
-/digest report auth --since 2026-03-01 # 限定时间
+/digest report 用户认证相关的工作      # 自然语言，语义匹配
+/digest report                         # 展示话题聚类供选择
 ```
 
-- **自然语言触发** — 不需要精确 tag 名称
-- **已有报告更新** — 文件存在时向用户确认：智能合并 / 覆盖 / 另存 / 取消
+- **自然语言触发** — 从 CONTEXT-INDEX.md 和 session snapshots 语义匹配
+- **已有报告更新** — 文件存在时确认：智能合并 / 覆盖 / 另存 / 取消
 - **输出** — `data/reports/<topic>.md`
-
-### 其他
-
-```bash
-/digest status          # segments 总览、项目分布、top tags
-/digest rebuild-index   # 重建所有 tags-index.md
-```
 
 ## 安装与部署
 
 | 命令 | 作用 |
 |------|------|
-| `./install.sh --universal` | 6 个通用 skills + 3 个 hooks + 权限模板 → `~/.claude/` |
+| `./install.sh --universal` | 6 个通用 skills + hooks + 权限模板 → `~/.claude/` |
 | `./install.sh --project <path>` | 12 个工作流 skills + 权限 → `<project>/.claude/` |
 | `./install.sh --update` | 一键同步：补齐新 skills、更新 hooks、增量合并权限 |
-| `./install.sh --update --clean-permissions` | 同上 + 清理非模板权限条目（会话中累积的脏数据） |
+| `./install.sh --update --clean-permissions` | 同上 + 清理非模板权限条目 |
 | `./install.sh --repair` | 搬迁目录后修复 symlinks、hook 路径、config |
-| `./install.sh archive <keyword\|--all>` | 归档项目数据 |
-| `./install.sh --dry-run` | 预览不执行（搭配 --universal / --project / --update） |
+| `./install.sh --dry-run` | 预览不执行 |
 
 所有部署**幂等** — 重复执行无副作用。更新 skills 内容后执行 `--update` 即可一键同步。
 
@@ -205,7 +156,7 @@ flowchart TD
 
 ```markdown
 <PLUME-OVERRIDE>
-- Output path: $PLUME_ROOT/data/<slug>/specs/
+- Output path: <project-root>/docs/plume-skills/specs/
 - Gate: wait for user approval after spec review
 </PLUME-OVERRIDE>
 
@@ -213,7 +164,7 @@ flowchart TD
 → Override wins where conflicts exist; vendor as-is elsewhere
 ```
 
-无定制需求时 override 块为空，日后直接替换。新建 wrapper 参考 `templates/wrapper-skill.md`。
+新建 wrapper 参考 `templates/wrapper-skill.md`。
 
 ## 配置
 
@@ -226,18 +177,12 @@ locale:
   language: "zh-CN"                       # 生成文档语言
 
 context:
-  save_remind_after: 15                   # N 轮消息后提醒保存
+  max_data_size_mb: 500                   # 快照数据量上限，超过时提醒清理
 
 digest:
-  default_scope: "edgeexploration"        # 日报默认作用域
+  default_scope: "edge-exploration"       # 日报默认作用域
   auto_generate: false                    # true = 到点自动生成
   remind_at: ["09:00", "18:00"]           # 提醒时间点
-
-tags:                                     # segment tag 约束词表
-  tech: [react, typescript, go, ...]
-  module: [auth, payment, user, ...]
-  activity: [feature, bugfix, refactor, ...]
-  ref: []                                 # issue/PR 编号
 ```
 
 ## 模板
@@ -245,10 +190,12 @@ tags:                                     # segment tag 约束词表
 | 文件 | 用途 |
 |------|------|
 | `templates/wrapper-skill.md` | Wrapper 骨架 + 编写指南 |
+| `templates/session-snapshot.md` | Context Keeper 快照格式 |
+| `templates/context-index.md` | Context Keeper 索引格式 |
+| `templates/cleanup-report.md` | 快照清理报告格式 |
 | `templates/daily-report.md` | 日报结构 |
 | `templates/research-report.md` | 研究报告结构 |
 | `templates/git-plan.md` | Git 操作方案（提交前展示） |
-| `templates/settings.local.append.json` | 权限合并模板 |
 
 ## 致谢
 

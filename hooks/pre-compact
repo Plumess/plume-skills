@@ -1,57 +1,61 @@
 #!/usr/bin/env bash
-# plume-skills PreCompact hook — Layer 1 of three-layer compact protection
+# plume-skills PreCompact hook — dual-insurance Layer 1
 #
-# First attempt:  block compact + write .save-pending marker
-#                 → UserPromptSubmit injects [CONTEXT-SAVE-URGENT] on next message
-#                 → Claude saves context before compact proceeds
-# Second attempt: .save-pending still exists → allow compact + write .compact-marker
-#                 → UserPromptSubmit injects [CONTEXT-RECOVERY] for post-compact restore
+# First attempt:  block compact + write .save-pending-<session>
+#                 → UserPromptSubmit injects [CONTEXT-SAVE-URGENT]
+#                 → Claude saves with full context (highest quality)
+# Second attempt: .save-pending-<session> still exists → save didn't happen
+#                 → allow compact + write .compact-marker-<session>
+#                 → UserPromptSubmit injects [CONTEXT-RECOVERY]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUME_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Read cwd from hook input (JSON on stdin)
+# Read hook input from stdin
 HOOK_INPUT=""
 if [ ! -t 0 ]; then
   HOOK_INPUT="$(cat)"
 fi
 
 CWD=""
+SESSION_ID=""
 if [ -n "$HOOK_INPUT" ]; then
   CWD="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd",""))' 2>/dev/null || true)"
+  SESSION_ID="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("session_id","")[:8])' 2>/dev/null || true)"
 fi
-
-# Fallback to pwd
 if [ -z "$CWD" ]; then
   CWD="$(pwd)"
 fi
+if [ -z "$SESSION_ID" ]; then
+  SESSION_ID="unknown"
+fi
 
-SLUG="$(echo "$CWD" | sed 's|^/||; s|/|-|g')"
-DATA_DIR="$PLUME_ROOT/data"
-SAVE_PENDING="$DATA_DIR/.save-pending"
-COMPACT_MARKER="$DATA_DIR/.compact-marker"
+SLUG="$(echo "$CWD" | sed 's|/|-|g')"
+MARKER_DIR="$PLUME_ROOT/data"
+SAVE_PENDING="$MARKER_DIR/.save-pending-$SESSION_ID"
+COMPACT_MARKER="$MARKER_DIR/.compact-marker-$SESSION_ID"
 
-mkdir -p "$DATA_DIR"
+mkdir -p "$MARKER_DIR"
 
 if [ -f "$SAVE_PENDING" ]; then
-  # Second compact attempt — save didn't happen in time.
-  # Allow compact to proceed; write recovery marker for post-compact restore.
+  # Second attempt — save didn't complete. Allow compact; write recovery marker.
   rm -f "$SAVE_PENDING"
   cat > "$COMPACT_MARKER" <<EOF
 slug=$SLUG
 timestamp=$(date -u +%Y-%m-%dT%H-%M)
 cwd=$CWD
+session=$SESSION_ID
 EOF
   echo '{}'
 else
-  # First compact attempt — block compact, write .save-pending marker.
-  # UserPromptSubmit will inject [CONTEXT-SAVE-URGENT] on the next user message.
+  # First attempt — block compact, request save.
   cat > "$SAVE_PENDING" <<EOF
 slug=$SLUG
 timestamp=$(date -u +%Y-%m-%dT%H-%M)
 cwd=$CWD
+session=$SESSION_ID
 EOF
   cat <<'EOF'
 {"decision": "block", "reason": "Blocking compact to allow context-keeper save first."}
