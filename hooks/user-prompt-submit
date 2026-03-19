@@ -125,7 +125,7 @@ except:
     fi
   done <<< "$DIGEST_CFG"
 
-  # Check time window: are we near a remind_at time? (±30 min)
+  # Check time window: are we near a remind_at time? (±60 min)
   IN_WINDOW=false
   NOW_MIN=$(( $(date +%H) * 60 + $(date +%-M) ))
 
@@ -135,7 +135,7 @@ except:
     RTOTAL=$(( 10#$RHOUR * 60 + 10#$RMIN ))
     DIFF=$(( NOW_MIN - RTOTAL ))
     [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
-    if [ "$DIFF" -le 30 ]; then
+    if [ "$DIFF" -le 60 ]; then
       IN_WINDOW=true
       break
     fi
@@ -164,7 +164,7 @@ except:
         fi
       done
 
-      if [ "$SEG_COUNT" -ge 3 ]; then
+      if [ "$SEG_COUNT" -ge 1 ]; then
         touch "$HINT_MARKER"
         if [ "$AUTO_GENERATE" = "True" ]; then
           CONTEXT_PARTS+=("[DIGEST-AUTO] Auto-generate daily report now.

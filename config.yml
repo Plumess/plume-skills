@@ -12,7 +12,7 @@ locale:
 # 自动保存提醒
 context:
   # 用户消息轮次阈值：自上次 context-keeper SAVE 后，累计 N 轮用户消息时注入 [CONTEXT-SAVE-RECOMMENDED]
-  save_remind_after: 15
+  save_remind_after: 25
 
 digest:
   # 日报时间窗口：日历日 00:00~23:59（timezone 由 locale.timezone 决定）
@@ -27,7 +27,7 @@ digest:
   auto_generate: false
 
   # 提醒/自动生成的时间窗口（±30 分钟内触发）
-  # 条件：时间窗口内 + scope 内 segments >= 3 + 当日日报不存在
+  # 条件：时间窗口内（±60分钟） + scope 内 segments >= 1 + 当日日报不存在
   remind_at:
     - "09:00"    # 早间
     - "18:00"    # 晚间

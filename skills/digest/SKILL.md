@@ -250,9 +250,9 @@ Use when tags-index.md is suspected stale or missing.
 The `user-prompt-submit` hook detects when a daily report may be warranted.
 All conditions must be met:
 
-1. **Time window**: current time is within ±30 minutes of a `remind_at` time (default: 09:00, 18:00)
+1. **Time window**: current time is within ±60 minutes of a `remind_at` time (default: 09:00, 18:00)
 2. **Scope configured**: `default_scope` is set in config.yml
-3. **Segment count**: ≥ 3 segments for today across scoped projects
+3. **Segment count**: ≥ 1 segment for today across scoped projects
 4. **No existing report**: no `data/journal/YYYY-MM-DD.md` for today
 
 Fires **once per day** (marker file prevents repeat).

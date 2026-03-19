@@ -92,7 +92,11 @@ mkdir -p "$PLUME_ROOT/data/$slug/segments"
 <!-- tags: category:value, category:value, ... -->
 
 ## Summary
-[One paragraph: what was accomplished in this work block]
+[2-3 paragraphs: what was accomplished, the approach taken, and outcome/current state]
+
+## Key Changes
+- `path/to/file` — what changed and why
+- `path/to/file` — what changed and why
 
 ## Artifacts
 - created: [files created]
@@ -101,7 +105,7 @@ mkdir -p "$PLUME_ROOT/data/$slug/segments"
 - plans: [if writing-plans produced a plan, record its path under data/<slug>/plans/]
 
 ## Decisions
-- [Key decision: what was chosen and why]
+- [Decision]: [what was chosen] — [reasoning/trade-offs considered]
 
 ## Open Questions
 - [Unresolved questions, if any]
@@ -113,7 +117,7 @@ Read the file back. If read fails → retry write once → if still fails, repor
 
 **Step 5 — Rebuild LATEST.md** (index, NOT full content)
 
-From the most recent 2-3 segments, build a lightweight index:
+From the most recent 5 segments (or fewer if less exist), build a lightweight index:
 
 ```markdown
 # Context Index: <project-name>
@@ -140,7 +144,7 @@ From the most recent 2-3 segments, build a lightweight index:
 - [Recent key decisions, one line each]
 ```
 
-**Hard limit**: LATEST.md ≤ 400 tokens. This is an INDEX — details live in segments.
+**Hard limit**: LATEST.md ≤ 800 tokens. This is an INDEX — details live in segments.
 
 **Step 6 — Update tags-index.md**
 
@@ -171,7 +175,7 @@ Tell user: "Context saved — segment `[timestamp]`, index rebuilt. [N] segments
 echo "0" > "$PLUME_ROOT/data/$slug/.msg-count"
 rm -f "$PLUME_ROOT/data/.save-pending"
 ```
-This resets the hook message counter so `[CONTEXT-SAVE-RECOMMENDED]` won't fire until another 15 messages.
+This resets the hook message counter so `[CONTEXT-SAVE-RECOMMENDED]` won't fire until another 25 messages.
 Removing `.save-pending` tells the PreCompact hook that saving succeeded — the next compact will be blocked again (buying another save opportunity) instead of proceeding immediately.
 
 ### Verification Gate
@@ -206,7 +210,7 @@ $PLUME_ROOT/data/<slug>/LATEST.md
 ```
 
 - **Found** → proceed to Step 3
-- **Not found** → fallback: `ls segments/ | sort | tail -3`, read those segments, synthesize an index. Save it as LATEST.md for next time.
+- **Not found** → fallback: `ls segments/ | sort | tail -5`, read those segments, synthesize an index. Save it as LATEST.md for next time.
 
 **Step 3 — Present index to user**
 
@@ -215,9 +219,11 @@ Brief summary (2-3 lines):
 - What the next step is
 - How many segments of history are available
 
-**Step 4 — Load details on demand**
+**Step 4 — Load recent segments**
 
-Read specific segment files from the Segment Index ONLY if needed for the immediate next step. Do NOT read all segments upfront — this defeats the purpose of the lightweight index.
+Read the most recent 3 segment files from the Segment Index to build rich context. With 1M context window, the cost of loading a few segments is negligible compared to the recovery quality gained.
+
+If more historical depth is needed for the immediate next step, read additional segments as needed.
 
 **Step 5 — Resume work**
 
