@@ -4,7 +4,7 @@
 # 1. Always: inject PLUME_ROOT
 # 2. Pre-compact save: .save-pending-<session> → [CONTEXT-SAVE-URGENT]
 # 3. Compact recovery: .compact-marker-<session> → [CONTEXT-RECOVERY]
-# 4. Digest auto-sense: time-gated, only near remind_at → [DIGEST-HINT] or [DIGEST-AUTO]
+# 4. Digest auto-sense: triggers on first session after remind_at time → [DIGEST-HINT] or [DIGEST-AUTO]
 
 set -euo pipefail
 
@@ -68,22 +68,11 @@ fi
 # Skip entirely if compact signals are active
 if [ ! -f "$SAVE_PENDING" ] && [ ! -f "$COMPACT_MARKER" ]; then
 
-  # Quick time check FIRST — skip all config parsing if not near any remind time
+  # Quick time check FIRST — skip config parsing if before earliest default remind time
   NOW_MIN=$(( $(date +%H) * 60 + $(date +%-M) ))
 
-  # Default remind times: 09:00 and 18:00 (540 and 1080 minutes)
-  # Only parse config if we're roughly near these defaults (±90 min buffer)
-  MIGHT_BE_NEAR=false
-  for DEFAULT_RT in 540 1080; do
-    DIFF=$(( NOW_MIN - DEFAULT_RT ))
-    [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
-    if [ "$DIFF" -le 90 ]; then
-      MIGHT_BE_NEAR=true
-      break
-    fi
-  done
-
-  if [ "$MIGHT_BE_NEAR" = true ] && [ -f "$CONFIG" ]; then
+  # Default earliest remind: 09:00 (540 min). Skip if clearly before that.
+  if [ "$NOW_MIN" -ge 480 ] && [ -f "$CONFIG" ]; then
     DIGEST_CFG="$(python3 -c "
 import yaml
 try:
@@ -111,21 +100,19 @@ except:
       fi
     done <<< "$DIGEST_CFG"
 
-    # Precise time window check (±60 min)
-    IN_WINDOW=false
+    # Check: current time >= any remind_at time (first session after that time triggers)
+    PAST_REMIND=false
     for rtime in "${REMIND_TIMES[@]}"; do
       RHOUR="${rtime%%:*}"
       RMIN="${rtime##*:}"
       RTOTAL=$(( 10#$RHOUR * 60 + 10#$RMIN ))
-      DIFF=$(( NOW_MIN - RTOTAL ))
-      [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
-      if [ "$DIFF" -le 60 ]; then
-        IN_WINDOW=true
+      if [ "$NOW_MIN" -ge "$RTOTAL" ]; then
+        PAST_REMIND=true
         break
       fi
     done
 
-    if [ "$IN_WINDOW" = true ] && [ -n "$DEFAULT_SCOPE" ]; then
+    if [ "$PAST_REMIND" = true ] && [ -n "$DEFAULT_SCOPE" ]; then
       TODAY="$(date +%Y-%m-%d)"
       JOURNAL="$PLUME_ROOT/data/journal/${TODAY}.md"
       HINT_MARKER="$PLUME_ROOT/data/.digest-hint-$TODAY"
