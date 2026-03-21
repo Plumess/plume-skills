@@ -69,9 +69,23 @@ fi
 if [ ! -f "$SAVE_PENDING" ] && [ ! -f "$COMPACT_MARKER" ]; then
 
   # Quick time check FIRST — skip config parsing if before earliest default remind time
-  NOW_MIN=$(( $(date +%H) * 60 + $(date +%-M) ))
+  # Use configured timezone via python (TZ-aware)
+  TZ_NAME="$(python3 -c "
+import yaml
+try:
+    c = yaml.safe_load(open('$CONFIG'))
+    print(c.get('locale', {}).get('timezone', 'Asia/Shanghai'))
+except:
+    print('Asia/Shanghai')
+" 2>/dev/null || echo 'Asia/Shanghai')"
 
-  # Default earliest remind: 09:00 (540 min). Skip if clearly before that.
+  NOW_MIN=$(python3 -c "
+import datetime, zoneinfo
+now = datetime.datetime.now(zoneinfo.ZoneInfo('$TZ_NAME'))
+print(now.hour * 60 + now.minute)
+" 2>/dev/null || echo $(( $(date +%H) * 60 + $(date +%-M) )))
+
+  # Default earliest remind: 12:00 (720 min). Skip if clearly before that.
   if [ "$NOW_MIN" -ge 480 ] && [ -f "$CONFIG" ]; then
     DIGEST_CFG="$(python3 -c "
 import yaml
@@ -113,7 +127,7 @@ except:
     done
 
     if [ "$PAST_REMIND" = true ] && [ -n "$DEFAULT_SCOPE" ]; then
-      TODAY="$(date +%Y-%m-%d)"
+      TODAY="$(TZ=$TZ_NAME date +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)"
       JOURNAL="$PLUME_ROOT/data/journal/${TODAY}.md"
       HINT_MARKER="$PLUME_ROOT/data/.digest-hint-$TODAY"
 

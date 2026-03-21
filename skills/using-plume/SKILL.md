@@ -30,7 +30,8 @@ Skills with `<PLUME-OVERRIDE>` blocks: read override → read vendor skill via P
 | `[CONTEXT-SAVE-URGENT]` | Call context-keeper SAVE immediately (full context, highest quality) |
 | `[CONTEXT-RECOVERY]` | Call context-keeper — it will SAVE then RESTORE |
 | `[PLUME_ROOT: ...]` missing | Fallback: derive PLUME_ROOT from `~/.claude/settings.local.json` hook paths, then call context-keeper RESTORE |
-| `[DIGEST-HINT]` / `[DIGEST-AUTO]` | Suggest or auto-run `/digest daily` |
+| `[DIGEST-HINT]` | Remind user: "今日有工作记录，可运行 /digest daily 生成日报" |
+| `[DIGEST-AUTO]` | Launch background subagent to generate daily report silently. Tell user one line: "日报生成中（后台）..." |
 
 Never save "just because" — only on signals or user request.
 
