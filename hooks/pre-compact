@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 # plume-skills PreCompact hook — dual-insurance Layer 1
 #
-# First attempt:  block compact + write .save-pending-<session>
-#                 → UserPromptSubmit injects [CONTEXT-SAVE-URGENT]
+# Single marker design: .save-pending-<session-id>-<marker-id>
+#   phase=save     → first attempt, block compact
+#   phase=recovery → second attempt, allow compact
+#
+# First attempt:  no marker for this session → create phase=save, block compact
+#                 → UserPromptSubmit injects [CONTEXT-SAVE-URGENT marker-id=<mid>]
 #                 → Claude saves with full context (highest quality)
-# Second attempt: .save-pending-<session> still exists → save didn't happen
-#                 → allow compact + write .compact-marker-<session>
-#                 → UserPromptSubmit injects [CONTEXT-RECOVERY]
+# Second attempt: marker still exists → update phase=recovery, allow compact
+#                 → UserPromptSubmit injects [CONTEXT-RECOVERY marker-id=<mid>]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUME_ROOT="$(dirname "$SCRIPT_DIR")"
+MARKER_DIR="$PLUME_ROOT/data"
 
-# Read hook input from stdin
+# Read hook input — parse with sed (no python3)
 HOOK_INPUT=""
 if [ ! -t 0 ]; then
   HOOK_INPUT="$(cat)"
@@ -22,8 +26,9 @@ fi
 CWD=""
 SESSION_ID=""
 if [ -n "$HOOK_INPUT" ]; then
-  CWD="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd",""))' 2>/dev/null || true)"
-  SESSION_ID="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("session_id","")[:8])' 2>/dev/null || true)"
+  CWD="$(printf '%s' "$HOOK_INPUT" | sed -n 's/.*"cwd" *: *"\([^"]*\)".*/\1/p')"
+  SESSION_ID="$(printf '%s' "$HOOK_INPUT" | sed -n 's/.*"session_id" *: *"\([^"]*\)".*/\1/p')"
+  SESSION_ID="${SESSION_ID:0:8}"
 fi
 if [ -z "$CWD" ]; then
   CWD="$(pwd)"
@@ -33,29 +38,25 @@ if [ -z "$SESSION_ID" ]; then
 fi
 
 SLUG="$(echo "$CWD" | sed 's|/|-|g')"
-MARKER_DIR="$PLUME_ROOT/data"
-SAVE_PENDING="$MARKER_DIR/.save-pending-$SESSION_ID"
-COMPACT_MARKER="$MARKER_DIR/.compact-marker-$SESSION_ID"
-
 mkdir -p "$MARKER_DIR"
 
-if [ -f "$SAVE_PENDING" ]; then
-  # Second attempt — save didn't complete. Allow compact; write recovery marker.
-  rm -f "$SAVE_PENDING"
-  cat > "$COMPACT_MARKER" <<EOF
-slug=$SLUG
-timestamp=$(date -u +%Y-%m-%dT%H-%M)
-cwd=$CWD
-session=$SESSION_ID
-EOF
+# Find existing marker for this session
+EXISTING="$(ls "$MARKER_DIR"/.save-pending-"${SESSION_ID}"-* 2>/dev/null | head -1 || true)"
+
+if [ -n "$EXISTING" ]; then
+  # Second attempt — save didn't complete. Update phase to recovery, allow compact.
+  sed -i 's/^phase=save$/phase=recovery/' "$EXISTING"
   echo '{}'
 else
-  # First attempt — block compact, request save.
-  cat > "$SAVE_PENDING" <<EOF
+  # First attempt — generate marker-id, block compact, request save.
+  # Read timezone from config.yml (pure grep, no python/yaml)
+  TZ_NAME="$(grep -oP '^\s*timezone:\s*"\K[^"]+' "$PLUME_ROOT/config.yml" 2>/dev/null || echo 'Asia/Shanghai')"
+  MARKER_ID="$(TZ="$TZ_NAME" date +%Y%m%d-%H%M)"
+
+  cat > "$MARKER_DIR/.save-pending-${SESSION_ID}-${MARKER_ID}" <<EOF
+phase=save
 slug=$SLUG
-timestamp=$(date -u +%Y-%m-%dT%H-%M)
 cwd=$CWD
-session=$SESSION_ID
 EOF
   cat <<'EOF'
 {"decision": "block", "reason": "Blocking compact to allow context-keeper save first."}

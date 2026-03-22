@@ -29,7 +29,7 @@ Matching: Claude project slug **contains** scope keyword as substring.
 > **`[DIGEST-AUTO]` mode**: Launch a background subagent to complete the entire daily report autonomously. Tell the user one line: "日报生成中（后台）..." then proceed with the current conversation. The subagent reads jsonl tails, generates report, and writes to journal/. Do NOT block the current session.
 
 **Step 2** — Gather content per active session (first available source):
-1. Session snapshots (`plume-context/sessions/<id>-*.md`, prefer lowest seq)
+1. Session snapshots (`plume-context/sessions/<id>-<marker-id>.md`, prefer primary over fallback)
 2. CONTEXT-INDEX.md timeline entry
 3. jsonl tail (~200 lines)
 
@@ -58,7 +58,7 @@ Generate a research report.
 
 ## /digest status
 
-Display: configured scope, matched projects, per-project snapshot count, today's active sessions, daily report existence.
+Display: configured scope, matched projects, per-project snapshot count, today's active sessions, daily report existence. Check `$PLUME_ROOT/data/digest-hint/` for today's hint marker status.
 
 ---
 

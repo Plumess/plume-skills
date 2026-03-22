@@ -2,8 +2,8 @@
 # plume-skills UserPromptSubmit hook
 # Functions:
 # 1. Always: inject PLUME_ROOT
-# 2. Pre-compact save: .save-pending-<session> → [CONTEXT-SAVE-URGENT]
-# 3. Compact recovery: .compact-marker-<session> → [CONTEXT-RECOVERY]
+# 2. Marker phase=save → [CONTEXT-SAVE-URGENT marker-id=<mid>]
+# 3. Marker phase=recovery → [CONTEXT-RECOVERY marker-id=<mid>]
 # 4. Digest auto-sense: triggers on first session after remind_at time → [DIGEST-HINT] or [DIGEST-AUTO]
 
 set -euo pipefail
@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUME_ROOT="$(dirname "$SCRIPT_DIR")"
 CONFIG="$PLUME_ROOT/config.yml"
 
-# Read hook input
+# Read hook input — parse with pure bash (avoid python3 for simple JSON)
 HOOK_INPUT=""
 if [ ! -t 0 ]; then
   HOOK_INPUT="$(cat)"
@@ -21,8 +21,9 @@ fi
 CWD=""
 SESSION_ID=""
 if [ -n "$HOOK_INPUT" ]; then
-  CWD="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd",""))' 2>/dev/null || true)"
-  SESSION_ID="$(echo "$HOOK_INPUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("session_id","")[:8])' 2>/dev/null || true)"
+  CWD="$(printf '%s' "$HOOK_INPUT" | sed -n 's/.*"cwd" *: *"\([^"]*\)".*/\1/p')"
+  SESSION_ID="$(printf '%s' "$HOOK_INPUT" | sed -n 's/.*"session_id" *: *"\([^"]*\)".*/\1/p')"
+  SESSION_ID="${SESSION_ID:0:8}"
 fi
 if [ -z "$CWD" ]; then
   CWD="$(pwd)"
@@ -33,124 +34,107 @@ fi
 
 SLUG="$(echo "$CWD" | sed 's|/|-|g')"
 CLAUDE_PROJECTS="$HOME/.claude/projects"
+MARKER_DIR="$PLUME_ROOT/data"
 
 CONTEXT_PARTS=()
 
 # --- Always: inject PLUME_ROOT ---
 CONTEXT_PARTS+=("[PLUME_ROOT: $PLUME_ROOT]")
 
-# --- Pre-compact save signal (session-scoped) ---
-SAVE_PENDING="$PLUME_ROOT/data/.save-pending-$SESSION_ID"
-if [ -f "$SAVE_PENDING" ]; then
-  CONTEXT_PARTS+=("[CONTEXT-SAVE-URGENT] Compact was blocked to allow saving. Call context-keeper SAVE immediately — next compact attempt will proceed without blocking.")
-fi
+# --- Marker signal: single .save-pending-<sid>-<mid> with phase field ---
+MARKER_HIT=false
+MARKER_FILE="$(ls "$MARKER_DIR"/.save-pending-"${SESSION_ID}"-* 2>/dev/null | head -1 || true)"
+if [ -n "$MARKER_FILE" ]; then
+  MARKER_HIT=true
+  # Extract marker-id from filename: .save-pending-<sid>-<marker-id> → last YYYYMMDD-HHMM
+  MARKER_ID="$(basename "$MARKER_FILE" | sed "s/^\.save-pending-${SESSION_ID}-//")"
+  # Read phase from file
+  PHASE="$(grep -oP '^phase=\K.*' "$MARKER_FILE" 2>/dev/null || echo 'save')"
 
-# --- Compact recovery (session-scoped) ---
-COMPACT_MARKER="$PLUME_ROOT/data/.compact-marker-$SESSION_ID"
-if [ -f "$COMPACT_MARKER" ]; then
-  MARKER_SLUG=""
-  while IFS='=' read -r key value; do
-    case "$key" in
-      slug) MARKER_SLUG="$value" ;;
-    esac
-  done < "$COMPACT_MARKER"
-
-  rm -f "$COMPACT_MARKER"
-
-  CONTEXT_DIR="$CLAUDE_PROJECTS/$MARKER_SLUG/plume-context"
-  CONTEXT_PARTS+=("[CONTEXT-RECOVERY] Session was compacted. Restore task state now.
-- Context dir: $CONTEXT_DIR
-- CONTEXT-INDEX: $CONTEXT_DIR/CONTEXT-INDEX.md
-- Call the context-keeper skill to restore.")
+  if [ "$PHASE" = "recovery" ]; then
+    CONTEXT_PARTS+=("[CONTEXT-RECOVERY marker-id=$MARKER_ID] Session was compacted. Call context-keeper to SAVE fallback then RESTORE.")
+  else
+    CONTEXT_PARTS+=("[CONTEXT-SAVE-URGENT marker-id=$MARKER_ID] Compact was blocked to allow saving. Call context-keeper SAVE immediately.")
+  fi
 fi
 
 # --- Digest auto-sense (time-gated: only near remind_at) ---
 # Skip entirely if compact signals are active
-if [ ! -f "$SAVE_PENDING" ] && [ ! -f "$COMPACT_MARKER" ]; then
+if [ "$MARKER_HIT" = false ]; then
 
-  # Quick time check FIRST — skip config parsing if before earliest default remind time
-  # Use configured timezone via python (TZ-aware)
-  TZ_NAME="$(python3 -c "
-import yaml
+  # Quick bash-only time check — skip everything if before 08:00
+  HOUR_NOW=$(date +%H)
+  if [ "$HOUR_NOW" -ge 8 ] && [ -f "$CONFIG" ]; then
+
+    # Single python3 call: read config + compute time + evaluate digest trigger
+    # Output format: NOW_MIN|TZ_NAME|DEFAULT_SCOPE|AUTO_GENERATE|TODAY|PAST_REMIND
+    DIGEST_RESULT="$(python3 -c "
+import datetime, zoneinfo, sys
 try:
+    import yaml
     c = yaml.safe_load(open('$CONFIG'))
-    print(c.get('locale', {}).get('timezone', 'Asia/Shanghai'))
-except:
-    print('Asia/Shanghai')
-" 2>/dev/null || echo 'Asia/Shanghai')"
+except Exception:
+    print('|||||||skip')
+    sys.exit(0)
 
-  NOW_MIN=$(python3 -c "
-import datetime, zoneinfo
-now = datetime.datetime.now(zoneinfo.ZoneInfo('$TZ_NAME'))
-print(now.hour * 60 + now.minute)
-" 2>/dev/null || echo $(( $(date +%H) * 60 + $(date +%-M) )))
-
-  # Default earliest remind: 12:00 (720 min). Skip if clearly before that.
-  if [ "$NOW_MIN" -ge 480 ] && [ -f "$CONFIG" ]; then
-    DIGEST_CFG="$(python3 -c "
-import yaml
+tz_name = c.get('locale', {}).get('timezone', 'Asia/Shanghai')
 try:
-    c = yaml.safe_load(open('$CONFIG'))
-    d = c.get('digest', {})
-    print(d.get('default_scope', ''))
-    print(d.get('auto_generate', False))
-    for t in d.get('remind_at', []):
-        print('remind:' + str(t))
-except:
-    pass
-" 2>/dev/null || true)"
+    now = datetime.datetime.now(zoneinfo.ZoneInfo(tz_name))
+except Exception:
+    now = datetime.datetime.now()
+now_min = now.hour * 60 + now.minute
+today = now.strftime('%Y-%m-%d')
 
-    DEFAULT_SCOPE=""
-    AUTO_GENERATE="False"
-    REMIND_TIMES=()
+if now_min < 480:
+    print('|||||||skip')
+    sys.exit(0)
 
-    while IFS= read -r line; do
-      if [[ "$line" == remind:* ]]; then
-        REMIND_TIMES+=("${line#remind:}")
-      elif [ -z "$DEFAULT_SCOPE" ]; then
-        DEFAULT_SCOPE="$line"
-      elif [ "$AUTO_GENERATE" = "False" ]; then
-        AUTO_GENERATE="$line"
-      fi
-    done <<< "$DIGEST_CFG"
+d = c.get('digest', {})
+scope = d.get('default_scope', '')
+auto = str(d.get('auto_generate', False))
+remind_times = d.get('remind_at', [])
 
-    # Check: current time >= any remind_at time (first session after that time triggers)
-    PAST_REMIND=false
-    for rtime in "${REMIND_TIMES[@]}"; do
-      RHOUR="${rtime%%:*}"
-      RMIN="${rtime##*:}"
-      RTOTAL=$(( 10#$RHOUR * 60 + 10#$RMIN ))
-      if [ "$NOW_MIN" -ge "$RTOTAL" ]; then
-        PAST_REMIND=true
-        break
-      fi
-    done
+past = 'false'
+for t in remind_times:
+    parts = str(t).split(':')
+    if len(parts) == 2:
+        rt = int(parts[0]) * 60 + int(parts[1])
+        if now_min >= rt:
+            past = 'true'
+            break
 
-    if [ "$PAST_REMIND" = true ] && [ -n "$DEFAULT_SCOPE" ]; then
-      TODAY="$(TZ=$TZ_NAME date +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)"
-      JOURNAL="$PLUME_ROOT/data/journal/${TODAY}.md"
-      HINT_MARKER="$PLUME_ROOT/data/.digest-hint-$TODAY"
+print(f'{now_min}|{tz_name}|{scope}|{auto}|{today}|{past}')
+" 2>/dev/null || echo "|||||||skip")"
 
-      if [ ! -f "$JOURNAL" ] && [ ! -f "$HINT_MARKER" ]; then
-        HAS_ACTIVITY=false
-        if [ -d "$CLAUDE_PROJECTS" ]; then
-          for projdir in "$CLAUDE_PROJECTS"/*/; do
-            dirname="$(basename "$projdir")"
-            if echo "$dirname" | grep -qi "$DEFAULT_SCOPE"; then
-              if find "$projdir" -maxdepth 1 -name "*.jsonl" -newermt "$TODAY" -print -quit 2>/dev/null | grep -q .; then
-                HAS_ACTIVITY=true
-                break
+    if [ "$DIGEST_RESULT" != "|||||||skip" ]; then
+      IFS='|' read -r NOW_MIN TZ_NAME DEFAULT_SCOPE AUTO_GENERATE TODAY PAST_REMIND <<< "$DIGEST_RESULT"
+
+      if [ "$PAST_REMIND" = "true" ] && [ -n "$DEFAULT_SCOPE" ]; then
+        JOURNAL="$PLUME_ROOT/data/journal/${TODAY}.md"
+        HINT_MARKER="$PLUME_ROOT/data/digest-hint/$TODAY"
+
+        if [ ! -f "$JOURNAL" ] && [ ! -f "$HINT_MARKER" ]; then
+          HAS_ACTIVITY=false
+          if [ -d "$CLAUDE_PROJECTS" ]; then
+            for projdir in "$CLAUDE_PROJECTS"/*/; do
+              dirname="$(basename "$projdir")"
+              if echo "$dirname" | grep -qi "$DEFAULT_SCOPE"; then
+                if find "$projdir" -maxdepth 1 -name "*.jsonl" -newermt "$TODAY" -print -quit 2>/dev/null | grep -q .; then
+                  HAS_ACTIVITY=true
+                  break
+                fi
               fi
-            fi
-          done
-        fi
+            done
+          fi
 
-        if [ "$HAS_ACTIVITY" = true ]; then
-          touch "$HINT_MARKER"
-          if [ "$AUTO_GENERATE" = "True" ]; then
-            CONTEXT_PARTS+=("[DIGEST-AUTO] Auto-generate daily report now. Scope: $DEFAULT_SCOPE")
-          else
-            CONTEXT_PARTS+=("[DIGEST-HINT] Active sessions today (scope: $DEFAULT_SCOPE), no daily report yet.")
+          if [ "$HAS_ACTIVITY" = true ]; then
+            mkdir -p "$PLUME_ROOT/data/digest-hint"
+            touch "$HINT_MARKER"
+            if [ "$AUTO_GENERATE" = "True" ]; then
+              CONTEXT_PARTS+=("[DIGEST-AUTO] Auto-generate daily report now. Scope: $DEFAULT_SCOPE")
+            else
+              CONTEXT_PARTS+=("[DIGEST-HINT] Active sessions today (scope: $DEFAULT_SCOPE), no daily report yet.")
+            fi
           fi
         fi
       fi
@@ -166,12 +150,13 @@ fi
 
 FULL_MSG="$(printf '%s\n' "${CONTEXT_PARTS[@]}")"
 
-ESCAPED="$(printf '%s' "$FULL_MSG" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' 2>/dev/null || printf '%s' "$FULL_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | awk '{printf "%s\\n", $0}')"
+# JSON-escape with pure bash
+ESCAPED="$(printf '%s' "$FULL_MSG" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')"
 
 cat <<EOF
 {
   "hookSpecificOutput": {
-    "additionalContext": $ESCAPED
+    "additionalContext": "$ESCAPED"
   }
 }
 EOF

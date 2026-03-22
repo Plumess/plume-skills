@@ -61,6 +61,7 @@ plume-skills/
 ├── install.sh                        # 部署器（幂等，支持 --update 一键同步）
 └── data/                             # 运行时数据（gitignored）
     ├── journal/                      #   日报（跨项目）
+    ├── digest-hint/                  #   日报触发 marker（每日去重）
     └── reports/                      #   研究报告
 ```
 
@@ -79,11 +80,11 @@ flowchart TD
     A["Compact 即将发生"] --> B{"PreCompact Hook"}
     B -->|"首次: block + .save-pending"| C["下一条消息"]
     C --> D["UserPromptSubmit 注入 URGENT"]
-    D --> E["Claude 用完整上下文写快照 (001)"]
-    E --> F["清除 .save-pending，compact 下次正常执行"]
-    B -->|"二次: .save-pending 仍在 → 放行"| G["Compact 执行"]
-    G --> H["UserPromptSubmit 注入 RECOVERY"]
-    H --> I["Claude 捕获 compact 摘要为快照 (002)"]
+    D --> E["Claude 用完整上下文写快照 (id-marker-id.md)"]
+    E --> F["清除 marker，compact 下次正常执行"]
+    B -->|"二次: marker 仍在 → phase=recovery，放行"| G["Compact 执行"]
+    G --> H["UserPromptSubmit 注入 RECOVERY marker-id"]
+    H --> I["检查 primary 是否存在：存在→跳过，否则写 fallback"]
     I --> J["恢复工作状态"]
 
     style E fill:#10b981,color:#fff
@@ -91,9 +92,9 @@ flowchart TD
     style J fill:#10b981,color:#fff
 ```
 
-- **001 快照**（PreCompact 成功拦截）：完整上下文，最高质量
-- **002 快照**（compact 已执行）：compact 摘要，质量次之但完全可靠
-- 恢复时优先读最小序号（最高质量）
+- **`<id>-<marker-id>.md`**（手动保存或 PreCompact 拦截）：完整上下文，最高质量
+- **`<id>-<marker-id>-fallback.md`**（compact 已执行）：compact 摘要，质量次之但完全可靠
+- 恢复时同一 marker-id 下优先读 primary（无 fallback 后缀）；多个 marker-id 时读最新
 
 ### 清理
 
@@ -103,10 +104,10 @@ flowchart TD
 
 ```
 ~/.claude/projects/<slug>/plume-context/
-├── CONTEXT-INDEX.md         # 全历史时间线索引（≤1500 tokens）
-└── sessions/                # 每次 compact 的快照
-    ├── <id>-001.md          # PreCompact 快照（完整上下文）
-    └── <id>-002.md          # Post-compact 快照（compact 摘要）
+├── CONTEXT-INDEX.md                      # 全历史时间线索引（≤1500 tokens）
+└── sessions/
+    ├── <id>-<YYYYMMDD-HHMM>.md           # Primary 快照（PreCompact 拦截或手动保存）
+    └── <id>-<YYYYMMDD-HHMM>-fallback.md  # Fallback（compact 后恢复写入）
 ```
 
 ## Digest
