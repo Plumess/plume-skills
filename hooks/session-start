@@ -24,6 +24,7 @@ ESCAPED="$(printf '%s' "$SKILL_CONTENT" | python3 -c 'import sys,json; print(jso
 cat <<EOF
 {
   "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
     "additionalContext": $ESCAPED
   }
 }

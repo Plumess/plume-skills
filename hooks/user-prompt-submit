@@ -156,6 +156,7 @@ ESCAPED="$(printf '%s' "$FULL_MSG" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\
 cat <<EOF
 {
   "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
     "additionalContext": "$ESCAPED"
   }
 }
