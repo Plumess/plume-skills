@@ -24,7 +24,7 @@ Matching: Claude project slug **contains** scope keyword as substring.
 
 ### Steps
 
-**Step 1** — Find scoped project dirs in `~/.claude/projects/`. For each, find jsonl files modified on target date. Display matched projects + session counts to user for confirmation (skip if `[DIGEST-AUTO]`).
+**Step 1** — Find scoped project dirs in `~/.claude/projects/`. For each, find jsonl files whose **file mtime** (last-modified timestamp) falls on target date — use `os.path.getmtime()` or `find -newer`/`ls -la` to check mtime, NOT the session ID or directory creation time. A session started on an earlier date but still active today will have today's mtime and must be included. Display matched projects + session counts to user for confirmation (skip if `[DIGEST-AUTO]`).
 
 > **`[DIGEST-AUTO]` mode**: Launch a background subagent to complete the entire daily report autonomously. Tell the user one line: "日报生成中（后台）..." then proceed with the current conversation. The subagent reads jsonl tails, generates report, and writes to journal/. Do NOT block the current session.
 
