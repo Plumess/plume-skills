@@ -21,19 +21,105 @@
 - **Context Keeper** — 自研。双保险 compact 保护，基于 Claude 原生数据的全会话历史索引
 - **Digest** — 自研。从 Claude 原生会话数据生成跨项目日报，研究报告自然语言触发，scope 隔离隐私
 
-## 快速开始
+## 安装
+
+### 场景 A：个人机器（标准安装）
+
+最常见的安装方式。核心 skills 部署到用户级 `~/.claude/`，对所有项目生效；工作流 skills 按项目安装。
 
 ```bash
 git clone <your-repo> ~/plume-skills && cd ~/plume-skills
 
-# 通用 skills（引导、上下文管理、日报/研发记录 等非开发对话也通用的 skills）
-./install.sh --universal
+# 核心 skills（引导、上下文管理、日报、brainstorming、skill 发现/创建）+ hooks
+./install.sh --core
 
-# 为项目安装工作流 skills（具体项目目录下才安装 superpowers skills 套件及其对应的 warpper 定制）
+# 为项目安装工作流 skills（superpowers wrapper 套件）
 ./install.sh --project ~/my-project
 ```
 
-启动 Claude Code 即可使用。框架通过 SessionStart hook 自动注入，Claude 按需加载 skills。
+部署效果：
+```
+~/.claude/
+├── skills/
+│   ├── using-plume → ~/plume-skills/skills/using-plume
+│   ├── context-keeper → ~/plume-skills/skills/context-keeper
+│   ├── digest → ~/plume-skills/skills/digest
+│   ├── brainstorming → ~/plume-skills/skills/brainstorming-universal
+│   ├── find-skills → ~/plume-skills/vendor/find-skills
+│   └── skill-creator → ~/plume-skills/vendor/skill-creator
+└── settings.local.json  ← hooks + 权限
+
+~/my-project/.claude/
+├── skills/
+│   ├── brainstorming → ~/plume-skills/skills/brainstorming
+│   ├── writing-plans → ~/plume-skills/skills/writing-plans
+│   └── ...（12 个工作流 skills）
+└── settings.local.json  ← 权限
+```
+
+### 场景 B：共享服务器（项目级隔离）
+
+在共享账户（如公共服务器的 root）上，核心 skills 不能装到 `~/.claude/`（会影响同账户下所有用户）。使用 `--base` 将核心 skills 部署到项目目录下，仅对该项目生效。
+
+```bash
+cd /root/plume/plume-skills
+
+# 核心 skills 部署到项目级 .claude/
+./install.sh --core --base /root/plume
+
+# 工作流 skills 同样部署到项目级（与核心共享同一 .claude/）
+./install.sh --project /root/plume
+```
+
+部署效果：
+```
+/root/plume/.claude/
+├── skills/
+│   ├── using-plume → /root/plume/plume-skills/skills/using-plume
+│   ├── context-keeper → ...
+│   ├── digest → ...
+│   ├── brainstorming → ...（核心 + 工作流全部在此）
+│   ├── writing-plans → ...
+│   └── ...
+└── settings.local.json  ← hooks + 权限（合并）
+
+~/.claude/  ← 不受任何影响
+```
+
+仅在 `/root/plume` 目录下启动的 Claude 会话才会加载这些 skills。
+
+### 后续维护
+
+```bash
+# 同步 skills/hooks/权限到最新状态
+./install.sh --update                          # 个人机器
+./install.sh --update --base /root/plume       # 共享服务器
+
+# 同步 + 清理非模板权限条目
+./install.sh --update --clean-permissions [--base <path>]
+
+# 搬迁目录后修复 symlinks、hook 路径、config
+./install.sh --repair [--base <path>]
+
+# 归档项目数据
+./install.sh archive <keyword|--all>
+
+# 预览不执行
+./install.sh --dry-run --core [--base <path>]
+```
+
+所有部署**幂等** — 重复执行无副作用。更新 skills 内容后执行 `--update` 即可一键同步。
+
+### 命令速查
+
+| 命令 | 作用 |
+|------|------|
+| `--core [--base <path>]` | 6 个核心 skills + hooks + 权限 |
+| `--project <path>` | 12 个工作流 skills + 权限 |
+| `--update [--base <path>]` | 一键同步 skills、hooks、权限 |
+| `--update --clean-permissions` | 同上 + 清理非模板权限条目 |
+| `--repair [--base <path>]` | 修复搬迁后的路径引用 |
+| `--dry-run` | 预览不执行（可与其他命令组合） |
 
 ## 目录结构
 
@@ -137,19 +223,6 @@ flowchart TD
 - **自然语言触发** — 从 CONTEXT-INDEX.md 和 session snapshots 语义匹配
 - **已有报告更新** — 文件存在时确认：智能合并 / 覆盖 / 另存 / 取消
 - **输出** — `data/reports/<topic>.md`
-
-## 安装与部署
-
-| 命令 | 作用 |
-|------|------|
-| `./install.sh --universal` | 6 个通用 skills + hooks + 权限模板 → `~/.claude/` |
-| `./install.sh --project <path>` | 12 个工作流 skills + 权限 → `<project>/.claude/` |
-| `./install.sh --update` | 一键同步：补齐新 skills、更新 hooks、增量合并权限 |
-| `./install.sh --update --clean-permissions` | 同上 + 清理非模板权限条目 |
-| `./install.sh --repair` | 搬迁目录后修复 symlinks、hook 路径、config |
-| `./install.sh --dry-run` | 预览不执行 |
-
-所有部署**幂等** — 重复执行无副作用。更新 skills 内容后执行 `--update` 即可一键同步。
 
 ## Wrapper 模式
 

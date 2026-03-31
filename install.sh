@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # plume-skills 部署器
-# 用法: ./install.sh --universal | --project [path] | archive <slug|--all>
+# 用法: ./install.sh --core [--base path] | --project [path] | archive <slug|--all>
 set -euo pipefail
 
 # ─── 颜色 ────────────────────────────────────────────────────
@@ -13,17 +13,18 @@ err()   { echo -e "${RED}[plume]${NC} $*" >&2; }
 PLUME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=false
 CLEAN_PERMS=false
+BASE_DIR=""
 
 # ─── Skill 分类 ──────────────────────────────────────────────
-# skills/ 中的原创/wrapper skills（通用安装）
-UNIVERSAL_PLUME_SKILLS=(using-plume context-keeper digest)
+# skills/ 中的原创/wrapper skills（核心安装）
+CORE_PLUME_SKILLS=(using-plume context-keeper digest)
 
 # 通用 brainstorming（显式激活版，目录名与部署名不同）
-UNIVERSAL_BRAINSTORMING_SRC="skills/brainstorming-universal"
-UNIVERSAL_BRAINSTORMING_NAME="brainstorming"
+CORE_BRAINSTORMING_SRC="skills/brainstorming-universal"
+CORE_BRAINSTORMING_NAME="brainstorming"
 
-# vendor/ 中的社区 skills（通用安装）
-UNIVERSAL_VENDOR_SKILLS=(
+# vendor/ 中的社区 skills（核心安装）
+CORE_VENDOR_SKILLS=(
   "vendor/find-skills:find-skills"
   "vendor/skill-creator:skill-creator"
 )
@@ -40,6 +41,12 @@ PROJECT_SKILLS=(
 )
 
 # ─── 辅助函数 ─────────────────────────────────────────────────
+
+# 计算 Claude 配置目录：--base 指定时用 <base>/.claude，否则用 ~/.claude
+claude_dir() {
+  echo "${BASE_DIR:-$HOME}/.claude"
+}
+
 symlink_skill() {
   local src="$1" dest="$2" name="$3"
   if [ ! -e "$src" ] && [ ! -L "$src" ]; then
@@ -118,7 +125,7 @@ sync_json_permissions() {
     return 0
   fi
   if [ ! -f "$target" ]; then
-    warn "  $target 不存在，请先执行 --universal 安装"
+    warn "  $target 不存在，请先执行 --core 安装"
     return 0
   fi
   # Compare: how many to add, how many to remove
@@ -158,8 +165,10 @@ write_plume_root() {
 }
 
 # ─── 命令 ─────────────────────────────────────────────────────
-cmd_universal() {
-  info "安装通用 skills 到 ~/.claude/skills/"
+cmd_core() {
+  local claude_dir
+  claude_dir="$(claude_dir)"
+  info "安装核心 skills 到 $claude_dir/skills/"
   echo ""
 
   info "将安装以下 skills:"
@@ -179,24 +188,24 @@ cmd_universal() {
     fi
   fi
 
-  mkdir -p "$HOME/.claude/skills"
+  mkdir -p "$claude_dir/skills"
 
   # 链接原创/wrapper skills（来自 skills/）
   info "正在链接 plume skills..."
-  for skill in "${UNIVERSAL_PLUME_SKILLS[@]}"; do
-    symlink_skill "$PLUME_ROOT/skills/$skill" "$HOME/.claude/skills/$skill" "$skill"
+  for skill in "${CORE_PLUME_SKILLS[@]}"; do
+    symlink_skill "$PLUME_ROOT/skills/$skill" "$claude_dir/skills/$skill" "$skill"
   done
   # brainstorming 通用版（目录名 ≠ 部署名）
-  symlink_skill "$PLUME_ROOT/$UNIVERSAL_BRAINSTORMING_SRC" "$HOME/.claude/skills/$UNIVERSAL_BRAINSTORMING_NAME" "$UNIVERSAL_BRAINSTORMING_NAME"
+  symlink_skill "$PLUME_ROOT/$CORE_BRAINSTORMING_SRC" "$claude_dir/skills/$CORE_BRAINSTORMING_NAME" "$CORE_BRAINSTORMING_NAME"
 
   # 链接 vendor skills（来自 vendor/ 子目录）
   info "正在链接 vendor skills..."
-  for entry in "${UNIVERSAL_VENDOR_SKILLS[@]}"; do
+  for entry in "${CORE_VENDOR_SKILLS[@]}"; do
     local rel_path="${entry%%:*}"
     local name="${entry##*:}"
     local src="$PLUME_ROOT/$rel_path"
     if [ -d "$src" ] && [ -f "$src/SKILL.md" ]; then
-      symlink_skill "$src" "$HOME/.claude/skills/$name" "$name"
+      symlink_skill "$src" "$claude_dir/skills/$name" "$name"
     else
       warn "  $name — 未找到 $rel_path/SKILL.md"
     fi
@@ -205,7 +214,7 @@ cmd_universal() {
 
   # 合并 hooks 到 settings.local.json（替换 __PLUME_ROOT__ 为实际路径）
   info "合并 hooks 配置..."
-  local settings_file="$HOME/.claude/settings.local.json"
+  local settings_file="$claude_dir/settings.local.json"
   local hooks_resolved
   hooks_resolved="$(sed "s|__PLUME_ROOT__|$PLUME_ROOT|g" "$PLUME_ROOT/hooks/hooks.json")"
   if [ ! -f "$settings_file" ]; then
@@ -244,7 +253,7 @@ cmd_universal() {
   write_plume_root
   echo ""
 
-  ok "通用安装完成。"
+  ok "核心安装完成。"
 }
 
 cmd_project() {
@@ -343,7 +352,10 @@ cmd_archive() {
 }
 
 cmd_update() {
+  local claude_dir
+  claude_dir="$(claude_dir)"
   info "更新 plume-skills（同步 skills、hooks、权限）..."
+  info "  目标: $claude_dir"
   echo ""
 
   if ! command -v jq &>/dev/null; then
@@ -351,14 +363,14 @@ cmd_update() {
     exit 1
   fi
 
-  local settings_file="$HOME/.claude/settings.local.json"
+  local settings_file="$claude_dir/settings.local.json"
   local changes=0
 
   # 1. 补齐 skills symlinks（新增的 skill 自动链接，已有的不动）
   info "同步 skills symlinks..."
-  mkdir -p "$HOME/.claude/skills"
-  for skill in "${UNIVERSAL_PLUME_SKILLS[@]}"; do
-    local dest="$HOME/.claude/skills/$skill"
+  mkdir -p "$claude_dir/skills"
+  for skill in "${CORE_PLUME_SKILLS[@]}"; do
+    local dest="$claude_dir/skills/$skill"
     local src="$PLUME_ROOT/skills/$skill"
     if [ ! -L "$dest" ] && [ ! -e "$dest" ]; then
       if $DRY_RUN; then
@@ -386,19 +398,19 @@ cmd_update() {
     fi
   done
   # brainstorming 通用版
-  local bs_dest="$HOME/.claude/skills/$UNIVERSAL_BRAINSTORMING_NAME"
-  local bs_src="$PLUME_ROOT/$UNIVERSAL_BRAINSTORMING_SRC"
+  local bs_dest="$claude_dir/skills/$CORE_BRAINSTORMING_NAME"
+  local bs_src="$PLUME_ROOT/$CORE_BRAINSTORMING_SRC"
   if [ ! -L "$bs_dest" ] && [ ! -e "$bs_dest" ]; then
     if ! $DRY_RUN; then ln -sf "$bs_src" "$bs_dest"; fi
-    ok "  $UNIVERSAL_BRAINSTORMING_NAME — 新增链接"
+    ok "  $CORE_BRAINSTORMING_NAME — 新增链接"
     changes=$((changes + 1))
   fi
   # vendor skills
-  for entry in "${UNIVERSAL_VENDOR_SKILLS[@]}"; do
+  for entry in "${CORE_VENDOR_SKILLS[@]}"; do
     local rel_path="${entry%%:*}"
     local name="${entry##*:}"
     local src="$PLUME_ROOT/$rel_path"
-    local dest="$HOME/.claude/skills/$name"
+    local dest="$claude_dir/skills/$name"
     if [ -d "$src" ] && [ -f "$src/SKILL.md" ] && [ ! -L "$dest" ] && [ ! -e "$dest" ]; then
       if ! $DRY_RUN; then ln -sf "$src" "$dest"; fi
       ok "  $name — 新增链接"
@@ -433,7 +445,7 @@ cmd_update() {
       fi
     fi
   else
-    warn "  $settings_file 不存在，请先执行 --universal 安装"
+    warn "  $settings_file 不存在，请先执行 --core 安装"
   fi
 
   # 3. 同步权限（默认只增不删；--clean-permissions 时精确同步）
@@ -454,18 +466,21 @@ cmd_update() {
 }
 
 cmd_repair() {
+  local claude_dir
+  claude_dir="$(claude_dir)"
   info "修复 plume-skills 路径引用..."
+  info "  目标: $claude_dir"
   echo ""
 
   # 1. 更新 config.yml 中的 plume_root
   info "更新 config.yml..."
   write_plume_root
 
-  # 2. 重建 ~/.claude/skills/ symlinks
-  if [ -d "$HOME/.claude/skills" ]; then
-    info "修复通用 skills symlinks..."
-    for skill in "${UNIVERSAL_PLUME_SKILLS[@]}"; do
-      local dest="$HOME/.claude/skills/$skill"
+  # 2. 重建 skills symlinks
+  if [ -d "$claude_dir/skills" ]; then
+    info "修复核心 skills symlinks..."
+    for skill in "${CORE_PLUME_SKILLS[@]}"; do
+      local dest="$claude_dir/skills/$skill"
       if [ -L "$dest" ]; then
         rm "$dest"
         ln -sf "$PLUME_ROOT/skills/$skill" "$dest"
@@ -473,16 +488,16 @@ cmd_repair() {
       fi
     done
     # brainstorming 通用版
-    local bs_dest="$HOME/.claude/skills/$UNIVERSAL_BRAINSTORMING_NAME"
+    local bs_dest="$claude_dir/skills/$CORE_BRAINSTORMING_NAME"
     if [ -L "$bs_dest" ]; then
       rm "$bs_dest"
-      ln -sf "$PLUME_ROOT/$UNIVERSAL_BRAINSTORMING_SRC" "$bs_dest"
-      ok "  $UNIVERSAL_BRAINSTORMING_NAME — 已更新"
+      ln -sf "$PLUME_ROOT/$CORE_BRAINSTORMING_SRC" "$bs_dest"
+      ok "  $CORE_BRAINSTORMING_NAME — 已更新"
     fi
-    for entry in "${UNIVERSAL_VENDOR_SKILLS[@]}"; do
+    for entry in "${CORE_VENDOR_SKILLS[@]}"; do
       local rel_path="${entry%%:*}"
       local name="${entry##*:}"
-      local dest="$HOME/.claude/skills/$name"
+      local dest="$claude_dir/skills/$name"
       if [ -L "$dest" ]; then
         rm "$dest"
         ln -sf "$PLUME_ROOT/$rel_path" "$dest"
@@ -492,7 +507,7 @@ cmd_repair() {
   fi
 
   # 3. 修复 settings.local.json 中的 hook 路径
-  local settings_file="$HOME/.claude/settings.local.json"
+  local settings_file="$claude_dir/settings.local.json"
   if [ -f "$settings_file" ] && grep -q "hooks/session-start" "$settings_file"; then
     info "修复 hook 路径..."
     if command -v jq &>/dev/null; then
@@ -532,13 +547,26 @@ usage() {
 plume-skills 部署器
 
 用法:
-  ./install.sh --universal [--dry-run]       部署通用 skills 到 ~/.claude/
-  ./install.sh --project [path] [--dry-run]  部署项目 skills 到 <path>/.claude/
-  ./install.sh --update [--dry-run]          同步 skills/hooks/权限到最新状态
-  ./install.sh --update --clean-permissions  同步 + 清理非模板权限条目
-  ./install.sh --repair                      修复搬迁后的路径引用
-  ./install.sh archive <keyword|--all>       归档项目数据用于迁移
-  ./install.sh --help                        显示帮助
+  ./install.sh --core [--base path] [--dry-run]  部署核心 skills + hooks
+  ./install.sh --project [path] [--dry-run]      部署项目工作流 skills
+  ./install.sh --update [--base path] [--dry-run] 同步 skills/hooks/权限
+  ./install.sh --update --clean-permissions       同步 + 清理非模板权限条目
+  ./install.sh --repair [--base path]             修复搬迁后的路径引用
+  ./install.sh archive <keyword|--all>            归档项目数据用于迁移
+  ./install.sh --help                             显示帮助
+
+选项:
+  --base <path>  将核心 skills 部署到 <path>/.claude/ 而非 ~/.claude/
+                 适用于共享服务器等无法使用用户级配置的场景
+
+示例:
+  # 个人机器
+  ./install.sh --core                        # → ~/.claude/
+  ./install.sh --project ~/my-project        # → ~/my-project/.claude/
+
+  # 共享服务器（项目级隔离）
+  ./install.sh --core --base /root/plume     # → /root/plume/.claude/
+  ./install.sh --project /root/plume         # → /root/plume/.claude/
 
 vendor/ 中的内容已随项目一起分发，无需额外拉取。
 EOF
@@ -550,7 +578,8 @@ ARCHIVE_PATTERN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --universal)  CMD="universal"; shift ;;
+    --core)       CMD="core"; shift ;;
+    --universal)  CMD="core"; shift ;;  # 向后兼容
     --project)    CMD="project"; shift
                   if [ "${1:-}" ] && [[ ! "$1" =~ ^-- ]]; then
                     PROJECT_PATH="$1"; shift
@@ -558,6 +587,7 @@ while [[ $# -gt 0 ]]; do
     --update)     CMD="update"; shift ;;
     --repair)     CMD="repair"; shift ;;
     archive)      CMD="archive"; shift; ARCHIVE_PATTERN="${1:---all}"; shift 2>/dev/null || true ;;
+    --base)       shift; BASE_DIR="${1:?--base 需要指定路径}"; shift ;;
     --clean-permissions) CLEAN_PERMS=true; shift ;;
     --dry-run)    DRY_RUN=true; shift ;;
     --help|-h)    usage; exit 0 ;;
@@ -571,9 +601,9 @@ if [ -z "$CMD" ]; then
 fi
 
 case "$CMD" in
-  universal) cmd_universal ;;
-  project)   cmd_project "$PROJECT_PATH" ;;
-  update)    cmd_update ;;
-  repair)    cmd_repair ;;
-  archive)   cmd_archive "$ARCHIVE_PATTERN" ;;
+  core)    cmd_core ;;
+  project) cmd_project "$PROJECT_PATH" ;;
+  update)  cmd_update ;;
+  repair)  cmd_repair ;;
+  archive) cmd_archive "$ARCHIVE_PATTERN" ;;
 esac

@@ -29,7 +29,7 @@ Skills with `<PLUME-OVERRIDE>` blocks: read override → read vendor skill via P
 |--------|--------|
 | `[CONTEXT-SAVE-URGENT marker-id=<mid>]` | Call context-keeper SAVE immediately (full context, highest quality) |
 | `[CONTEXT-RECOVERY marker-id=<mid>]` | Call context-keeper — it will SAVE fallback then RESTORE |
-| `[PLUME_ROOT: ...]` missing | Fallback: derive PLUME_ROOT from `~/.claude/settings.local.json` hook paths, then call context-keeper RESTORE |
+| `[PLUME_ROOT: ...]` missing | Fallback: derive PLUME_ROOT from project-level `.claude/settings.local.json` hook paths (check cwd ancestors), or `~/.claude/settings.local.json`, then call context-keeper RESTORE |
 | `[DIGEST-HINT]` | Remind user: "今日有工作记录，可运行 /digest daily 生成日报" |
 | `[DIGEST-AUTO]` | Launch background subagent to generate daily report silently. Tell user one line: "日报生成中（后台）..." |
 

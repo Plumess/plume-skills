@@ -1,5 +1,5 @@
 # plume-skills 全局配置
-# plume_root 由 install.sh --universal 自动写入
+# plume_root 由 install.sh --core 自动写入
 plume_root: "/home/plume/plume-skills"
 
 # 本地化设置

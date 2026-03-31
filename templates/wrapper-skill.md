@@ -40,9 +40,9 @@ WRAPPER 编写指南
    - vendor 路径格式: PLUME_ROOT/vendor/superpowers/<skill-name>/SKILL.md
 
 4. 部署注册
-   - 通用 skill: 在 install.sh 的 UNIVERSAL_PLUME_SKILLS 数组中添加
+   - 核心 skill: 在 install.sh 的 CORE_PLUME_SKILLS 数组中添加
    - 项目 skill: 在 install.sh 的 PROJECT_SKILLS 数组中添加
-   - 社区 vendor: 在 UNIVERSAL_VENDOR_SKILLS 数组中添加（格式 "vendor/path:deploy-name"）
+   - 社区 vendor: 在 CORE_VENDOR_SKILLS 数组中添加（格式 "vendor/path:deploy-name"）
 
 5. 注意事项
    - wrapper 目录名 = 部署后的 skill 名（install.sh 按目录名 symlink）
