@@ -141,13 +141,12 @@ plume-skills/
 │   ├── find-skills/                  #   vercel-labs/skills
 │   └── skill-creator/                #   anthropics/skills
 │
-├── hooks/                            # PreCompact / UserPromptSubmit
+├── hooks/                            # SessionStart / UserPromptSubmit
 ├── templates/                        # wrapper / 报告 / git-plan 模板
 ├── config.yml                        # 全局配置（locale、scope）
 ├── install.sh                        # 部署器（幂等，支持 --update 一键同步）
 └── data/                             # 运行时数据（gitignored）
     ├── journal/                      #   日报（跨项目）
-    ├── digest-hint/                  #   日报触发 marker（每日去重）
     └── reports/                      #   研究报告
 ```
 
@@ -157,30 +156,21 @@ plume-skills/
 
 ## Context Keeper
 
-> Claude Code 长会话触发 compact 时丢失工作状态。context-keeper 用双保险机制解决这个问题，基于 Claude 原生 jsonl 会话记录，只维护索引层（session snapshots + CONTEXT-INDEX.md）。
+> 会话历史可读化工具。Claude 原生 jsonl 是完整记录但不可直接阅读，context-keeper 生成结构化摘要和跨会话时间线索引。
 
-### 双保险 Compact 保护
+### 用法
 
-```mermaid
-flowchart TD
-    A["Compact 即将发生"] --> B{"PreCompact Hook"}
-    B -->|"首次: block + .save-pending"| C["下一条消息"]
-    C --> D["UserPromptSubmit 注入 URGENT"]
-    D --> E["Claude 用完整上下文写快照 (id-marker-id.md)"]
-    E --> F["清除 marker，compact 下次正常执行"]
-    B -->|"二次: marker 仍在 → phase=recovery，放行"| G["Compact 执行"]
-    G --> H["UserPromptSubmit 注入 RECOVERY marker-id"]
-    H --> I["检查 primary 是否存在：存在→跳过，否则写 fallback"]
-    I --> J["恢复工作状态"]
+```bash
+# 保存当前会话摘要（完成阶段性工作时）
+/save
 
-    style E fill:#10b981,color:#fff
-    style I fill:#f59e0b,color:#fff
-    style J fill:#10b981,color:#fff
+# 查看会话历史时间线
+# 告诉 Claude "回顾历史" / "review history"
 ```
 
-- **`<id>-<marker-id>.md`**（手动保存或 PreCompact 拦截）：完整上下文，最高质量
-- **`<id>-<marker-id>-fallback.md`**（compact 已执行）：compact 摘要，质量次之但完全可靠
-- 恢复时同一 marker-id 下优先读 primary（无 fallback 后缀）；多个 marker-id 时读最新
+- **SAVE** — 从当前上下文生成结构化快照，更新时间线索引
+- **REVIEW** — 展示跨会话时间线，支持按会话深入查看
+- **CLEANUP** — 管理快照数据量，超过阈值时推荐清理候选
 
 ### 清理
 
@@ -190,15 +180,14 @@ flowchart TD
 
 ```
 ~/.claude/projects/<slug>/plume-context/
-├── CONTEXT-INDEX.md                      # 全历史时间线索引（≤1500 tokens）
+├── CONTEXT-INDEX.md                      # 全历史时间线索引
 └── sessions/
-    ├── <id>-<YYYYMMDD-HHMM>.md           # Primary 快照（PreCompact 拦截或手动保存）
-    └── <id>-<YYYYMMDD-HHMM>-fallback.md  # Fallback（compact 后恢复写入）
+    └── <id>-<YYYYMMDD-HHMM>.md           # 会话快照
 ```
 
 ## Digest
 
-> 从 Claude 原生数据（jsonl + session snapshots + MEMORY.md）生成日报和研究报告。
+> 从 Claude 原生数据（jsonl + session snapshots + MEMORY.md）生成日报和研究报告。手动触发，定时生成可通过 cron 配置（见 `docs/auto-digest-cron.md`）。
 
 ### 日报
 
@@ -255,8 +244,6 @@ context:
 
 digest:
   default_scope: "edge-exploration"       # 日报默认作用域
-  auto_generate: false                    # true = 到点自动生成
-  remind_at: ["09:00", "18:00"]           # 提醒时间点
 ```
 
 ## 模板

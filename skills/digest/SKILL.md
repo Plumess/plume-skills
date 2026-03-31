@@ -1,13 +1,13 @@
 ---
 name: digest
-description: "Use when user requests /digest, a daily summary, or a research report of session work. Also use when you see [DIGEST-HINT] or [DIGEST-AUTO] in context."
+description: "Use when user requests /digest, a daily summary, or a research report of session work."
 ---
 
-# Digest v2
+# Digest
 
 Generates daily reports and research reports from Claude's native data sources (jsonl + session snapshots + MEMORY.md).
 
-Read `$PLUME_ROOT/config.yml` for `locale` (timezone, language), `digest` (default_scope, auto_generate, remind_at).
+Read `$PLUME_ROOT/config.yml` for `locale` (timezone, language), `digest` (default_scope).
 
 > A report MUST cover ALL active sessions within scope. Always read source files — never summarize from memory alone.
 
@@ -24,12 +24,10 @@ Matching: Claude project slug **contains** scope keyword as substring.
 
 ### Steps
 
-**Step 1** — Find scoped project dirs in `~/.claude/projects/`. For each, find jsonl files whose **file mtime** (last-modified timestamp) falls on target date — use `os.path.getmtime()` or `find -newer`/`ls -la` to check mtime, NOT the session ID or directory creation time. A session started on an earlier date but still active today will have today's mtime and must be included. Display matched projects + session counts to user for confirmation (skip if `[DIGEST-AUTO]`).
-
-> **`[DIGEST-AUTO]` mode**: Launch a background subagent to complete the entire daily report autonomously. Tell the user one line: "日报生成中（后台）..." then proceed with the current conversation. The subagent reads jsonl tails, generates report, and writes to journal/. Do NOT block the current session.
+**Step 1** — Find scoped project dirs in `~/.claude/projects/`. For each, find jsonl files whose **file mtime** (last-modified timestamp) falls on target date — use `os.path.getmtime()` or `find -newer`/`ls -la` to check mtime, NOT the session ID or directory creation time. A session started on an earlier date but still active today will have today's mtime and must be included. Display matched projects + session counts to user for confirmation.
 
 **Step 2** — Gather content per active session (first available source):
-1. Session snapshots (`plume-context/sessions/<id>-<marker-id>.md`, prefer primary over fallback)
+1. Session snapshots (`plume-context/sessions/<id>-<timestamp>.md`)
 2. CONTEXT-INDEX.md timeline entry
 3. jsonl tail (~200 lines)
 
@@ -58,7 +56,7 @@ Generate a research report.
 
 ## /digest status
 
-Display: configured scope, matched projects, per-project snapshot count, today's active sessions, daily report existence. Check `$PLUME_ROOT/data/digest-hint/` for today's hint marker status.
+Display: configured scope, matched projects, per-project snapshot count, today's active sessions, daily report existence.
 
 ---
 

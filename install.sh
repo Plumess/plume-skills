@@ -155,6 +155,55 @@ sync_json_permissions() {
 }
 
 
+# 迁移：清理旧版本遗留（PreCompact hook、stale marker、废弃 config 字段）
+# 仅清理 plume-skills 自身产生的数据，不碰用户内容
+migrate_from_old_version() {
+  local claude_dir="$1"
+  local settings_file="$claude_dir/settings.local.json"
+  local migrated=0
+
+  # 清理 stale marker 文件（旧版 PreCompact 遗留）
+  local markers
+  markers="$(ls "$PLUME_ROOT/data"/.save-pending-* 2>/dev/null || true)"
+  if [ -n "$markers" ]; then
+    if $DRY_RUN; then
+      info "  将清理旧版 save-pending marker 文件"
+    else
+      rm -f "$PLUME_ROOT/data"/.save-pending-*
+      ok "  已清理旧版 save-pending marker 文件"
+    fi
+    migrated=$((migrated + 1))
+  fi
+
+  # 清理 digest-hint 目录（旧版 auto-sense 遗留）
+  if [ -d "$PLUME_ROOT/data/digest-hint" ]; then
+    if $DRY_RUN; then
+      info "  将清理旧版 digest-hint 目录"
+    else
+      rm -rf "$PLUME_ROOT/data/digest-hint"
+      ok "  已清理旧版 digest-hint 目录"
+    fi
+    migrated=$((migrated + 1))
+  fi
+
+  # 清理 config.yml 中的废弃字段（auto_generate、remind_at）
+  if grep -qE '^\s*(auto_generate|remind_at)' "$PLUME_ROOT/config.yml" 2>/dev/null; then
+    if $DRY_RUN; then
+      info "  将清理 config.yml 中的废弃字段（auto_generate、remind_at）"
+    else
+      sed -i '/^\s*auto_generate:/d; /^\s*remind_at:/d; /^\s*- "[0-9]\{2\}:[0-9]\{2\}"/d' "$PLUME_ROOT/config.yml"
+      # 清理可能残留的空注释行
+      sed -i '/^\s*# 自动生成/d; /^\s*# false 时仅提示/d; /^\s*# 最早提醒时间/d; /^\s*# 条件：/d; /^\s*# 每天每个时间点/d' "$PLUME_ROOT/config.yml"
+      ok "  已清理 config.yml 中的废弃字段"
+    fi
+    migrated=$((migrated + 1))
+  fi
+
+  if [ "$migrated" -eq 0 ]; then
+    info "  无旧版本遗留需要清理"
+  fi
+}
+
 write_plume_root() {
   if $DRY_RUN; then
     info "  将写入 plume_root=$PLUME_ROOT 到 config.yml"
@@ -457,7 +506,11 @@ cmd_update() {
     merge_json_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
   fi
 
-  # 4. 更新 plume_root
+  # 4. 迁移：清理旧版本遗留
+  info "迁移检查..."
+  migrate_from_old_version "$claude_dir"
+
+  # 5. 更新 plume_root
   info "更新配置..."
   write_plume_root
   echo ""
@@ -506,23 +559,27 @@ cmd_repair() {
     done
   fi
 
-  # 3. 修复 settings.local.json 中的 hook 路径
+  # 3. 同步 hooks（完整替换，确保旧版 PreCompact 等被移除）
   local settings_file="$claude_dir/settings.local.json"
-  if [ -f "$settings_file" ] && grep -q "hooks/session-start" "$settings_file"; then
-    info "修复 hook 路径..."
+  if [ -f "$settings_file" ]; then
+    info "同步 hooks..."
     if command -v jq &>/dev/null; then
+      local hooks_resolved
+      hooks_resolved="$(sed "s|__PLUME_ROOT__|$PLUME_ROOT|g" "$PLUME_ROOT/hooks/hooks.json")"
       local tmp
       tmp="$(mktemp)"
-      jq --arg path "$PLUME_ROOT/hooks/session-start" \
-        '.hooks.SessionStart[0].hooks[0].command = ("\"\($path)\"")' \
-        "$settings_file" > "$tmp" && mv "$tmp" "$settings_file"
-      ok "  hook 路径已更新为 $PLUME_ROOT/hooks/session-start"
+      jq -s '.[0] * { hooks: .[1].hooks }' "$settings_file" <(echo "$hooks_resolved") > "$tmp" && mv "$tmp" "$settings_file"
+      ok "  hooks 已同步（旧版 hooks 如 PreCompact 已移除）"
     else
-      warn "  未找到 jq — 请手动更新 $settings_file 中的 hook 路径"
+      warn "  未找到 jq — 请手动更新 $settings_file 中的 hooks"
     fi
   fi
 
-  # 4. 扫描项目级 symlinks（提示用户）
+  # 4. 迁移旧版本遗留
+  info "迁移检查..."
+  migrate_from_old_version "$claude_dir"
+
+  # 5. 扫描项目级 symlinks（提示用户）
   local broken_found=false
   for dir in "$HOME"/*/.claude/skills /tmp/*/.claude/skills; do
     [ -d "$dir" ] || continue

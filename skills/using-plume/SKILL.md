@@ -27,15 +27,10 @@ Skills with `<PLUME-OVERRIDE>` blocks: read override → read vendor skill via P
 
 | Signal | Action |
 |--------|--------|
-| `[CONTEXT-SAVE-URGENT marker-id=<mid>]` | Call context-keeper SAVE immediately (full context, highest quality) |
-| `[CONTEXT-RECOVERY marker-id=<mid>]` | Call context-keeper — it will SAVE fallback then RESTORE |
-| `[PLUME_ROOT: ...]` missing | Fallback: derive PLUME_ROOT from project-level `.claude/settings.local.json` hook paths (check cwd ancestors), or `~/.claude/settings.local.json`, then call context-keeper RESTORE |
-| `[DIGEST-HINT]` | Remind user: "今日有工作记录，可运行 /digest daily 生成日报" |
-| `[DIGEST-AUTO]` | Launch background subagent to generate daily report silently. Tell user one line: "日报生成中（后台）..." |
-
-Never save "just because" — only on signals or user request.
+| `[PLUME_ROOT: ...]` missing | Fallback: derive PLUME_ROOT from project-level `.claude/settings.local.json` hook paths (check cwd ancestors), or `~/.claude/settings.local.json` |
 
 **NEVER use native memory write for context saving.** When user says "保存上下文" / "save context" / "保存" or similar — always call context-keeper instead.
+
 ## Paths
 
 `[PLUME_ROOT: ...]` in context = absolute path to plume-skills. Use for:

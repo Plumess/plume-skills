@@ -4,7 +4,7 @@ plume_root: "/home/plume/plume-skills"
 
 # 本地化设置
 locale:
-  # 时区：影响时间戳、日报日期边界、remind_at 判断
+  # 时区：影响时间戳、日报日期边界
   timezone: "Asia/Shanghai"
   # 生成文档语言：日报、研究报告、设计文档等人类可阅读文档均使用此语言
   language: "zh-CN"
@@ -19,14 +19,3 @@ digest:
   # 目的：隔离工作/个人项目——公司项目统一在同一父目录下即可
   # 留空则每次生成时由用户指定
   default_scope: "edge-exploration"
-
-  # 自动生成：true 时在 remind_at 时间点自动执行日报生成（无需用户确认）
-  # false 时仅提示用户（[DIGEST-HINT]）
-  auto_generate: false
-
-  # 最早提醒时间：过了该时间后的首次会话交互结尾触发提醒
-  # 条件：当前时间 >= remind_at + scope 内有当日活跃 jsonl + 当日日报不存在
-  # 每天每个时间点只提醒一次（marker 文件防重复）
-  remind_at:
-    - "12:00"
-    - "20:00"
