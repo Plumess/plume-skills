@@ -1,10 +1,10 @@
 <p align="center">
   <h1 align="center">Plume-Skills</h1>
   <p align="center">
-    <strong>Give your Claude Code a brain that survives compact, a workflow that ships, and a diary that writes itself.</strong>
+    <strong>Give your Claude Code a readable session history, a workflow that ships, and a diary on cron.</strong>
   </p>
   <p align="center">
-    Built on <a href="https://github.com/obra/superpowers">superpowers</a> &nbsp;|&nbsp; Context persistence &nbsp;|&nbsp; Auto daily reports
+    Built on <a href="https://github.com/obra/superpowers">superpowers</a> &nbsp;|&nbsp; Session history &nbsp;|&nbsp; Daily reports
   </p>
 </p>
 
@@ -12,29 +12,32 @@
 
 > plume-skills 基于 [obra/superpowers](https://github.com/obra/superpowers) 的 12 个开发工作流 skills，通过 wrapper 模式进行定制扩展
 
-> 并新增上下文管理和日报生成能力，整合为一个统一框架。Symlink 部署，零侵入、零依赖、幂等安装
+> 并新增会话历史索引和日报生成能力，整合为一个统一框架。Symlink 部署，零侵入、零依赖、幂等安装
 
 
 **核心特点**：
 
 - **Wrapper 定制** — 不修改 vendor 原文，通过 `<PLUME-OVERRIDE>` 按需覆盖输出路径、流程门控、locale 等
-- **Context Keeper** — 自研。双保险 compact 保护，基于 Claude 原生数据的全会话历史索引
-- **Digest** — 自研。从 Claude 原生会话数据生成跨项目日报，研究报告自然语言触发，scope 隔离隐私
+- **Context Keeper** — 自研。将 Claude 原生 jsonl 转化为人类可读的结构化摘要和跨会话时间线索引
+- **Digest** — 自研。从 Claude 原生会话数据生成跨项目日报和研究报告，scope 隔离隐私，支持 cron 定时自动生成
 
 ## 安装
 
 ### 场景 A：个人机器（标准安装）
 
-最常见的安装方式。核心 skills 部署到用户级 `~/.claude/`，对所有项目生效；工作流 skills 按项目安装。
+核心 skills 部署到用户级 `~/.claude/`，对所有项目生效；工作流 skills 按项目安装。
 
 ```bash
-git clone <your-repo> ~/plume-skills && cd ~/plume-skills
+git clone https://github.com/Plumess/plume-skills.git ~/plume-skills && cd ~/plume-skills
 
-# 核心 skills（引导、上下文管理、日报、brainstorming、skill 发现/创建）+ hooks
+# 核心 skills + hooks（安装过程会交互式配置 scope 和 cron 时间）
 ./install.sh --core
 
 # 为项目安装工作流 skills（superpowers wrapper 套件）
-./install.sh --project ~/my-project
+./install.sh --project ~/project-a
+
+# 可选：配置日报定时生成（写入 crontab）
+./install.sh cron
 ```
 
 部署效果：
@@ -49,7 +52,7 @@ git clone <your-repo> ~/plume-skills && cd ~/plume-skills
 │   └── skill-creator → ~/plume-skills/vendor/skill-creator
 └── settings.local.json  ← hooks + 权限
 
-~/my-project/.claude/
+~/project-a/.claude/
 ├── skills/
 │   ├── brainstorming → ~/plume-skills/skills/brainstorming
 │   ├── writing-plans → ~/plume-skills/skills/writing-plans
@@ -64,11 +67,14 @@ git clone <your-repo> ~/plume-skills && cd ~/plume-skills
 ```bash
 cd /root/plume/plume-skills
 
-# 核心 skills 部署到项目级 .claude/
+# 核心 skills 部署到项目级 .claude/（安装器会建议使用目录名作为 scope）
 ./install.sh --core --base /root/plume
 
-# 工作流 skills 同样部署到项目级（与核心共享同一 .claude/）
+# 工作流 skills 部署到项目级
 ./install.sh --project /root/plume
+
+# 可选：配置日报定时生成
+./install.sh cron
 ```
 
 部署效果：
@@ -88,37 +94,49 @@ cd /root/plume/plume-skills
 
 仅在 `/root/plume` 目录下启动的 Claude 会话才会加载这些 skills。
 
-### 后续维护
+### 更新与维护
+
+Skills 内容通过 symlink 指向仓库文件，`git pull` 后自动生效。`--update` 和 `--repair` 处理部署层面的变化（hooks、权限、迁移）。
 
 ```bash
-# 同步 skills/hooks/权限到最新状态
-./install.sh --update                          # 个人机器
-./install.sh --update --base /root/plume       # 共享服务器
+# 日常更新（无论跨了多少版本，一条命令搞定）
+git pull && ./install.sh --update [--base <path>]
 
-# 同步 + 清理非模板权限条目
-./install.sh --update --clean-permissions [--base <path>]
+# 或者直接再次 --core — 检测到已有安装时自动进入更新模式
+git pull && ./install.sh --core [--base <path>]
 
-# 搬迁目录后修复 symlinks、hook 路径、config
+# 搬迁目录后全量修复
 ./install.sh --repair [--base <path>]
-
-# 归档项目数据
-./install.sh archive <keyword|--all>
-
-# 预览不执行
-./install.sh --dry-run --core [--base <path>]
 ```
 
-所有部署**幂等** — 重复执行无副作用。更新 skills 内容后执行 `--update` 即可一键同步。
+**`--update`（增量同步）**：
+
+1. **Skills**：补齐新增 symlink，修复断链（已有的不动）
+2. **Hooks**：用当前模板整体替换 settings.local.json 中的 `hooks` 字段 — 旧版 hooks 自动移除
+3. **权限**：三方 diff — 比对「上次安装快照」与「当前模板」的差异，只增删 plume 自己的条目，用户自定义权限完全不动
+4. **迁移**：幂等检查清单，清理旧版遗留（废弃的 marker 文件、config 字段等）
+5. **Config**：更新 `plume_root` 为当前路径
+
+**`--repair`（全量重建）**：
+
+与 `--update` 的区别在于 symlinks 是**全部删除并重建**（而非增量），hooks 也完整替换。适用于目录搬迁或部署状态不确定时。
+
+**`--core` 自动检测**：如果目标目录已有 plume-skills 安装，`--core` 会自动跳转到 `--update` 模式，无需手动切换。
+
+**跨版本升级**：`git pull && ./install.sh --update` 一步到位。三方 diff 和迁移逻辑都是幂等的检查清单，每项独立检测、按需执行，中间版本不需要逐个经过。
+
+所有部署**幂等** — 重复执行无副作用。
 
 ### 命令速查
 
 | 命令 | 作用 |
 |------|------|
-| `--core [--base <path>]` | 6 个核心 skills + hooks + 权限 |
-| `--project <path>` | 12 个工作流 skills + 权限 |
-| `--update [--base <path>]` | 一键同步 skills、hooks、权限 |
-| `--update --clean-permissions` | 同上 + 清理非模板权限条目 |
-| `--repair [--base <path>]` | 修复搬迁后的路径引用 |
+| `--core [--base <path>]` | 首次安装核心 skills + hooks + 权限（已有安装时自动进入 update） |
+| `--project <path>` | 部署 12 个工作流 skills + 权限到项目 |
+| `--update [--base <path>]` | 增量同步 skills、hooks、权限（三方 diff）+ 旧版迁移 |
+| `--repair [--base <path>]` | 全量重建 symlinks + hooks 替换 + 旧版迁移 |
+| `cron [HH:MM]` | 写入日报 cron 到 crontab（读取 config scope + 时区自动转换） |
+| `archive <keyword\|--all>` | 归档项目数据用于迁移 |
 | `--dry-run` | 预览不执行（可与其他命令组合） |
 
 ## 目录结构
@@ -127,7 +145,7 @@ cd /root/plume/plume-skills
 plume-skills/
 ├── skills/                           # 自研 3 + wrapper 13 + 社区 2
 │   ├── using-plume/                  #   框架引导（hook 自动注入）
-│   ├── context-keeper/               #   上下文保存与恢复
+│   ├── context-keeper/               #   会话历史摘要与索引
 │   ├── digest/                       #   日报与研究报告
 │   ├── brainstorming-universal/      #   通用 brainstorming（显式激活）
 │   ├── brainstorming/                #   项目 brainstorming（严格自动触发）
@@ -143,7 +161,7 @@ plume-skills/
 │
 ├── hooks/                            # SessionStart / UserPromptSubmit
 ├── templates/                        # wrapper / 报告 / git-plan 模板
-├── config.yml                        # 全局配置（locale、scope）
+├── config.yml                        # 全局配置（locale、scope、cron）
 ├── install.sh                        # 部署器（幂等，支持 --update 一键同步）
 └── data/                             # 运行时数据（gitignored）
     ├── journal/                      #   日报（跨项目）
@@ -187,19 +205,28 @@ plume-skills/
 
 ## Digest
 
-> 从 Claude 原生数据（jsonl + session snapshots + MEMORY.md）生成日报和研究报告。手动触发，定时生成可通过 cron 配置（见 `docs/auto-digest-cron.md`）。
+> 从 Claude 原生数据（jsonl + session snapshots + MEMORY.md）生成日报和研究报告。手动触发或通过 cron 定时生成。
+
+### Scope
+
+Scope 是日报的项目过滤机制。`~/.claude/projects/` 下每个项目有一个 slug 目录（如 `-root-plume`、`-home-user-project-a`），scope 关键词对这些目录名做**子串匹配**。
+
+例如 `scope = "plume"`：
+- 匹配 `-root-plume`、`-root-plume-project-a` ✓
+- 不匹配 `-home-user-other-project` ✗
+
+不同 scope 的日报互不干扰，天然隔离公司/个人项目。`--core` 安装时会交互式配置，默认建议使用安装路径的目录名（`--base` 时用 base 目录名，全局安装时用 `$HOME` 目录名）。
 
 ### 日报
 
 ```bash
 /digest daily                         # 今日日报（default_scope）
 /digest daily 2026-03-15              # 指定日期
-/digest daily --scope edge-exploration # 指定作用域
+/digest daily --scope plume           # 指定作用域
 ```
 
 - **一天一份，跨项目聚合** — scope 下所有项目当天活跃会话
 - **数据源优先级** — session snapshots > CONTEXT-INDEX.md > jsonl 尾部
-- **Scope 隔离** — Claude 原生目录名子串匹配，公司与个人项目天然分离
 - **输出** — `data/journal/YYYY-MM-DD.md`
 
 ### 研究报告
@@ -212,6 +239,24 @@ plume-skills/
 - **自然语言触发** — 从 CONTEXT-INDEX.md 和 session snapshots 语义匹配
 - **已有报告更新** — 文件存在时确认：智能合并 / 覆盖 / 另存 / 取消
 - **输出** — `data/reports/<topic>.md`
+
+### 定时生成
+
+```bash
+# 写入 cron 到 crontab（读取 config 的 default_scope + cron_time + timezone）
+./install.sh cron
+
+# 指定时间（同时更新 config.yml 中的 cron_time）
+./install.sh cron 21:00
+```
+
+**工作原理**：
+
+1. 读取 config 的 `digest.cron_time`（默认 09:00）+ `locale.timezone`，用算术转换为本机时间写入 crontab，不修改系统时区
+2. 生成的 cron 命令以 `claude -p "/digest daily <yesterday> --scope <scope>"` 的形式调用 Claude CLI
+3. crontab 条目带 `# plume-skills-digest:<scope>` 标记，同 scope 重复执行是更新而非追加
+4. 每个 plume-skills 安装实例有独立的 config 和 `data/`，不同目录/用户的日报天然隔离
+5. 修改 scope 或时间后重新运行 `./install.sh cron` 即可更新 crontab
 
 ## Wrapper 模式
 
@@ -233,18 +278,21 @@ plume-skills/
 
 ```yaml
 # config.yml
-plume_root: /home/plume/plume-skills      # install.sh 自动设置
+plume_root: /path/to/plume-skills      # install.sh 自动设置
 
 locale:
-  timezone: "Asia/Shanghai"               # 时间戳、日报日期
+  timezone: "Asia/Shanghai"               # 时间戳、日报日期、cron 时区转换基准
   language: "zh-CN"                       # 生成文档语言
 
 context:
   max_data_size_mb: 500                   # 快照数据量上限，超过时提醒清理
 
 digest:
-  default_scope: "edge-exploration"       # 日报默认作用域
+  default_scope: ""                       # 日报作用域（--core 安装时交互式配置）
+  cron_time: "09:00"                      # 日报 cron 触发时间（config 时区）
 ```
+
+`--core` 安装时会交互式提示配置 `default_scope` 和 `cron_time`。scope 默认建议使用安装路径的目录名（`--base /root/plume` → `"plume"`），用户可手动输入自定义值，也可后续编辑 config.yml 修改。
 
 ## 模板
 

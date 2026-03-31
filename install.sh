@@ -12,7 +12,6 @@ err()   { echo -e "${RED}[plume]${NC} $*" >&2; }
 
 PLUME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=false
-CLEAN_PERMS=false
 BASE_DIR=""
 
 # ─── Skill 分类 ──────────────────────────────────────────────
@@ -76,82 +75,99 @@ symlink_skill() {
   fi
 }
 
-merge_json_permissions() {
+# 权限管理快照路径
+permissions_manifest() {
+  echo "$PLUME_ROOT/data/.installed-permissions.json"
+}
+
+# 三方 diff 权限同步：只动 plume 自己的条目，不碰用户的
+# 输入：target（settings.local.json），template（当前模板），manifest（上次安装快照）
+# 逻辑：
+#   stale  = manifest - template  （plume 旧版加的，新版已移除 → 删除）
+#   added  = template - target    （新版需要的，target 中还没有 → 添加）
+#   result = (target - stale) + added
+sync_permissions() {
   local target="$1" template="$2"
+  local manifest
+  manifest="$(permissions_manifest)"
+
   if ! command -v jq &>/dev/null; then
-    warn "未找到 jq — 无法合并配置。请安装 jq 后重新执行。"
+    warn "未找到 jq — 无法同步权限。请安装 jq 后重新执行。"
     warn "需要手动合并的模板: $template"
     return 0
   fi
+
+  # 首次安装：target 不存在
   if [ ! -f "$target" ]; then
     if $DRY_RUN; then
       info "  将从模板创建 $target"
     else
       cp "$template" "$target"
+      mkdir -p "$(dirname "$manifest")"
+      cp "$template" "$manifest"
       ok "  已创建 $target"
     fi
     return 0
   fi
-  # Check if all template permissions already exist in target
-  local new_count
-  new_count="$(jq -s '
-    (.[0].permissions.allow // []) as $existing |
-    (.[1].permissions.allow // []) as $new |
-    ($new - $existing) | length
-  ' "$target" "$template" 2>/dev/null || echo "-1")"
-  if [ "$new_count" = "0" ]; then
-    info "  权限已包含全部模板条目，跳过"
-    return 0
-  fi
-  if $DRY_RUN; then
-    info "  将合并权限到 $target（新增 $new_count 条）"
-    return 0
-  fi
-  local tmp
-  tmp="$(mktemp)"
-  jq -s '
-    (.[0].permissions.allow // []) as $existing |
-    (.[1].permissions.allow // []) as $new |
-    .[0] * { permissions: { allow: ($existing + $new | unique) } }
-  ' "$target" "$template" > "$tmp" && mv "$tmp" "$target"
-  ok "  已合并权限到 $target（新增 $new_count 条）"
-}
 
-# 精确同步权限：以模板为准，移除脏数据，补入新增项
-sync_json_permissions() {
-  local target="$1" template="$2"
-  if ! command -v jq &>/dev/null; then
-    warn "未找到 jq — 无法同步权限。请安装 jq 后重新执行。"
-    return 0
+  # 如果快照不存在（从旧版本升级），将当前模板视为旧快照
+  # 效果：首次 update 时不会误删任何条目，只补入新增
+  local manifest_file="$manifest"
+  if [ ! -f "$manifest_file" ]; then
+    manifest_file="$template"
   fi
-  if [ ! -f "$target" ]; then
-    warn "  $target 不存在，请先执行 --core 安装"
-    return 0
-  fi
-  # Compare: how many to add, how many to remove
+
+  # 三方 diff
   local diff_info
   diff_info="$(jq -s '
-    (.[0].permissions.allow // []) as $existing |
-    (.[1].permissions.allow // []) as $template |
-    { add: ($template - $existing | length), remove: ($existing - $template | length) }
-  ' "$target" "$template" 2>/dev/null || echo '{"add":-1,"remove":-1}')"
-  local to_add to_remove
-  to_add="$(echo "$diff_info" | jq '.add')"
-  to_remove="$(echo "$diff_info" | jq '.remove')"
-  if [ "$to_add" = "0" ] && [ "$to_remove" = "0" ]; then
-    info "  权限已与模板一致，无需同步"
+    (.[0].permissions.allow // []) as $current |
+    (.[1].permissions.allow // []) as $new_template |
+    (.[2].permissions.allow // []) as $old_template |
+    ($old_template - $new_template) as $stale |
+    ($new_template - $current) as $to_add |
+    ($current - $stale) as $cleaned |
+    {
+      stale: ($stale | length),
+      add: ($to_add | length),
+      result: (($cleaned + $to_add) | unique)
+    }
+  ' "$target" "$template" "$manifest_file" 2>/dev/null || echo '{"stale":0,"add":0,"result":[]}')"
+
+  local stale_count add_count
+  stale_count="$(echo "$diff_info" | jq '.stale')"
+  add_count="$(echo "$diff_info" | jq '.add')"
+
+  if [ "$stale_count" = "0" ] && [ "$add_count" = "0" ]; then
+    info "  权限已是最新"
+    # 确保快照存在
+    if [ ! -f "$manifest" ] && ! $DRY_RUN; then
+      mkdir -p "$(dirname "$manifest")"
+      cp "$template" "$manifest"
+    fi
     return 0
   fi
+
   if $DRY_RUN; then
-    info "  将同步权限（新增 $to_add 条，移除 $to_remove 条脏数据）"
+    [ "$stale_count" != "0" ] && info "  将移除 $stale_count 条旧版 plume 权限"
+    [ "$add_count" != "0" ] && info "  将新增 $add_count 条权限"
     return 0
   fi
+
   local tmp
   tmp="$(mktemp)"
-  # Replace permissions.allow with template's, keep everything else (hooks, etc.)
-  jq -s '.[0] * { permissions: { allow: .[1].permissions.allow } }' \
-    "$target" "$template" > "$tmp" && mv "$tmp" "$target"
-  ok "  权限已同步（新增 $to_add，移除 $to_remove 条脏数据）"
+  echo "$diff_info" | jq '{ permissions: { allow: .result } }' > "$tmp"
+  # 合并回 target（保留 hooks 等其他字段）
+  jq -s '.[0] * .[1]' "$target" "$tmp" > "${tmp}.merged" && mv "${tmp}.merged" "$target"
+  rm -f "$tmp"
+
+  # 更新快照
+  mkdir -p "$(dirname "$manifest")"
+  cp "$template" "$manifest"
+
+  local msg=""
+  [ "$stale_count" != "0" ] && msg="移除 $stale_count 条旧版"
+  [ "$add_count" != "0" ] && msg="${msg:+$msg，}新增 $add_count 条"
+  ok "  权限已同步（$msg）"
 }
 
 
@@ -217,12 +233,21 @@ write_plume_root() {
 cmd_core() {
   local claude_dir
   claude_dir="$(claude_dir)"
+
+  # 检测已有安装 → 自动进入 update 模式
+  if [ -d "$claude_dir/skills/using-plume" ] || [ -L "$claude_dir/skills/using-plume" ]; then
+    info "检测到已有安装（$claude_dir/skills/），自动进入更新模式..."
+    echo ""
+    cmd_update
+    return 0
+  fi
+
   info "安装核心 skills 到 $claude_dir/skills/"
   echo ""
 
   info "将安装以下 skills:"
   info "  - using-plume — 会话引导（hook 注入）"
-  info "  - context-keeper — compact 保存/恢复"
+  info "  - context-keeper — 会话历史摘要与索引"
   info "  - digest — 日报与研究报告"
   info "  - brainstorming — 结构化设计探索（显式激活）"
   info "  - find-skills — skill 发现"
@@ -294,7 +319,7 @@ cmd_core() {
 
   # 合并权限模板
   info "合并权限配置..."
-  merge_json_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
+  sync_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
   echo ""
 
   # 写入 plume_root
@@ -303,6 +328,50 @@ cmd_core() {
   echo ""
 
   ok "核心安装完成。"
+
+  # 交互式配置（dry-run 时跳过）
+  if ! $DRY_RUN; then
+    echo ""
+    info "配置 digest"
+    echo ""
+
+    # default_scope — 说明原理并建议
+    local current_scope suggested_scope
+    current_scope="$(grep -oP '^\s*default_scope:\s*"\K[^"]*' "$PLUME_ROOT/config.yml" 2>/dev/null || true)"
+    if [ -n "$BASE_DIR" ]; then
+      suggested_scope="$(basename "$BASE_DIR")"
+    else
+      suggested_scope="$(basename "$HOME")"
+    fi
+    local default_scope="${current_scope:-$suggested_scope}"
+
+    info "  日报作用域 (default_scope)"
+    info "  scope 用于过滤 ~/.claude/projects/ 中的项目目录名（子串匹配）。"
+    info "  例如 scope=\"plume\" 会匹配 -root-plume、-root-plume-project-a 等。"
+    info "  不同 scope 的日报互不干扰，可用于隔离公司/个人项目。"
+    info "  如需自定义请直接输入，否则回车使用默认值。"
+    echo ""
+    read -rp "  default_scope [$default_scope]: " input_scope
+    local final_scope="${input_scope:-$default_scope}"
+    if [ -n "$final_scope" ] && [ "$final_scope" != "$current_scope" ]; then
+      sed -i "s|^\(\s*default_scope:\).*|\1 \"$final_scope\"|" "$PLUME_ROOT/config.yml"
+      ok "  default_scope = \"$final_scope\""
+    fi
+
+    # cron_time
+    local current_cron
+    current_cron="$(grep -oP '^\s*cron_time:\s*"\K[^"]*' "$PLUME_ROOT/config.yml" 2>/dev/null || echo "09:00")"
+    echo ""
+    read -rp "  日报生成时间 (cron_time, config 时区) [$current_cron]: " input_cron
+    local final_cron="${input_cron:-$current_cron}"
+    if [ "$final_cron" != "$current_cron" ]; then
+      sed -i "s|^\(\s*cron_time:\).*|\1 \"$final_cron\"|" "$PLUME_ROOT/config.yml"
+      ok "  cron_time = \"$final_cron\""
+    fi
+
+    echo ""
+    info "运行 ./install.sh cron 可自动配置定时日报生成。"
+  fi
 }
 
 cmd_project() {
@@ -342,7 +411,7 @@ cmd_project() {
   echo ""
 
   info "合并权限配置..."
-  merge_json_permissions "$target/.claude/settings.local.json" "$PLUME_ROOT/templates/settings.local.append.json"
+  sync_permissions "$target/.claude/settings.local.json" "$PLUME_ROOT/templates/settings.local.append.json"
   echo ""
 
   ok "项目安装完成: $target"
@@ -446,24 +515,60 @@ cmd_update() {
       fi
     fi
   done
-  # brainstorming 通用版
+  # brainstorming 通用版（与 CORE_PLUME_SKILLS 相同的断链检测逻辑）
   local bs_dest="$claude_dir/skills/$CORE_BRAINSTORMING_NAME"
   local bs_src="$PLUME_ROOT/$CORE_BRAINSTORMING_SRC"
   if [ ! -L "$bs_dest" ] && [ ! -e "$bs_dest" ]; then
-    if ! $DRY_RUN; then ln -sf "$bs_src" "$bs_dest"; fi
-    ok "  $CORE_BRAINSTORMING_NAME — 新增链接"
+    if $DRY_RUN; then
+      info "  $CORE_BRAINSTORMING_NAME — 将新增链接"
+    else
+      ln -sf "$bs_src" "$bs_dest"
+      ok "  $CORE_BRAINSTORMING_NAME — 新增链接"
+    fi
     changes=$((changes + 1))
+  elif [ -L "$bs_dest" ]; then
+    local existing target_real
+    existing="$(readlink -f "$bs_dest" 2>/dev/null || true)"
+    target_real="$(readlink -f "$bs_src" 2>/dev/null || true)"
+    if [ "$existing" != "$target_real" ]; then
+      if $DRY_RUN; then
+        info "  $CORE_BRAINSTORMING_NAME — 将更新链接（旧→ $existing）"
+      else
+        rm "$bs_dest"; ln -sf "$bs_src" "$bs_dest"
+        ok "  $CORE_BRAINSTORMING_NAME — 已更新链接"
+      fi
+      changes=$((changes + 1))
+    fi
   fi
-  # vendor skills
+  # vendor skills（与 CORE_PLUME_SKILLS 相同的断链检测逻辑）
   for entry in "${CORE_VENDOR_SKILLS[@]}"; do
     local rel_path="${entry%%:*}"
     local name="${entry##*:}"
     local src="$PLUME_ROOT/$rel_path"
     local dest="$claude_dir/skills/$name"
-    if [ -d "$src" ] && [ -f "$src/SKILL.md" ] && [ ! -L "$dest" ] && [ ! -e "$dest" ]; then
-      if ! $DRY_RUN; then ln -sf "$src" "$dest"; fi
-      ok "  $name — 新增链接"
-      changes=$((changes + 1))
+    if [ -d "$src" ] && [ -f "$src/SKILL.md" ]; then
+      if [ ! -L "$dest" ] && [ ! -e "$dest" ]; then
+        if $DRY_RUN; then
+          info "  $name — 将新增链接"
+        else
+          ln -sf "$src" "$dest"
+          ok "  $name — 新增链接"
+        fi
+        changes=$((changes + 1))
+      elif [ -L "$dest" ]; then
+        local existing target_real
+        existing="$(readlink -f "$dest" 2>/dev/null || true)"
+        target_real="$(readlink -f "$src" 2>/dev/null || true)"
+        if [ "$existing" != "$target_real" ]; then
+          if $DRY_RUN; then
+            info "  $name — 将更新链接（旧→ $existing）"
+          else
+            rm "$dest"; ln -sf "$src" "$dest"
+            ok "  $name — 已更新链接"
+          fi
+          changes=$((changes + 1))
+        fi
+      fi
     fi
   done
   if [ "$changes" -eq 0 ]; then
@@ -497,14 +602,9 @@ cmd_update() {
     warn "  $settings_file 不存在，请先执行 --core 安装"
   fi
 
-  # 3. 同步权限（默认只增不删；--clean-permissions 时精确同步）
-  if $CLEAN_PERMS; then
-    info "同步权限（精确模式：以模板为准，清理非模板条目）..."
-    sync_json_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
-  else
-    info "同步权限（增量模式：仅补入模板新增项）..."
-    merge_json_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
-  fi
+  # 3. 同步权限（三方 diff：只动 plume 条目，保留用户自定义）
+  info "同步权限..."
+  sync_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
 
   # 4. 迁移：清理旧版本遗留
   info "迁移检查..."
@@ -529,35 +629,31 @@ cmd_repair() {
   info "更新 config.yml..."
   write_plume_root
 
-  # 2. 重建 skills symlinks
-  if [ -d "$claude_dir/skills" ]; then
-    info "修复核心 skills symlinks..."
-    for skill in "${CORE_PLUME_SKILLS[@]}"; do
-      local dest="$claude_dir/skills/$skill"
-      if [ -L "$dest" ]; then
-        rm "$dest"
-        ln -sf "$PLUME_ROOT/skills/$skill" "$dest"
-        ok "  $skill — 已更新"
-      fi
-    done
-    # brainstorming 通用版
-    local bs_dest="$claude_dir/skills/$CORE_BRAINSTORMING_NAME"
-    if [ -L "$bs_dest" ]; then
-      rm "$bs_dest"
-      ln -sf "$PLUME_ROOT/$CORE_BRAINSTORMING_SRC" "$bs_dest"
-      ok "  $CORE_BRAINSTORMING_NAME — 已更新"
+  # 2. 重建所有 skills symlinks（删除旧的并重建，包括新增的 skill）
+  mkdir -p "$claude_dir/skills"
+  info "重建核心 skills symlinks..."
+  for skill in "${CORE_PLUME_SKILLS[@]}"; do
+    local dest="$claude_dir/skills/$skill"
+    rm -f "$dest"
+    ln -sf "$PLUME_ROOT/skills/$skill" "$dest"
+    ok "  $skill — 已重建"
+  done
+  # brainstorming 通用版
+  local bs_dest="$claude_dir/skills/$CORE_BRAINSTORMING_NAME"
+  rm -f "$bs_dest"
+  ln -sf "$PLUME_ROOT/$CORE_BRAINSTORMING_SRC" "$bs_dest"
+  ok "  $CORE_BRAINSTORMING_NAME — 已重建"
+  # vendor skills
+  for entry in "${CORE_VENDOR_SKILLS[@]}"; do
+    local rel_path="${entry%%:*}"
+    local name="${entry##*:}"
+    local dest="$claude_dir/skills/$name"
+    if [ -d "$PLUME_ROOT/$rel_path" ]; then
+      rm -f "$dest"
+      ln -sf "$PLUME_ROOT/$rel_path" "$dest"
+      ok "  $name — 已重建"
     fi
-    for entry in "${CORE_VENDOR_SKILLS[@]}"; do
-      local rel_path="${entry%%:*}"
-      local name="${entry##*:}"
-      local dest="$claude_dir/skills/$name"
-      if [ -L "$dest" ]; then
-        rm "$dest"
-        ln -sf "$PLUME_ROOT/$rel_path" "$dest"
-        ok "  $name — 已更新"
-      fi
-    done
-  fi
+  done
 
   # 3. 同步 hooks（完整替换，确保旧版 PreCompact 等被移除）
   local settings_file="$claude_dir/settings.local.json"
@@ -575,11 +671,15 @@ cmd_repair() {
     fi
   fi
 
-  # 4. 迁移旧版本遗留
+  # 4. 同步权限
+  info "同步权限..."
+  sync_permissions "$settings_file" "$PLUME_ROOT/templates/settings.local.append.json"
+
+  # 5. 迁移旧版本遗留
   info "迁移检查..."
   migrate_from_old_version "$claude_dir"
 
-  # 5. 扫描项目级 symlinks（提示用户）
+  # 6. 扫描项目级 symlinks（提示用户）
   local broken_found=false
   for dir in "$HOME"/*/.claude/skills /tmp/*/.claude/skills; do
     [ -d "$dir" ] || continue
@@ -598,6 +698,131 @@ cmd_repair() {
   ok "修复完成。如有项目级 symlinks 需要修复，请对相关项目重新执行 --project。"
 }
 
+cmd_cron() {
+  local config="$PLUME_ROOT/config.yml"
+
+  # 检查依赖
+  if ! command -v python3 &>/dev/null; then
+    err "需要 python3 来计算时区转换"
+    exit 1
+  fi
+  if ! command -v crontab &>/dev/null; then
+    err "未找到 crontab 命令。请先安装 cron 服务："
+    err "  Debian/Ubuntu: sudo apt-get install cron"
+    err "  RHEL/CentOS:   sudo dnf install cronie"
+    err "  macOS:         系统自带"
+    exit 1
+  fi
+
+  # scope 从 config 读取
+  local scope
+  scope="$(grep -oP '^\s*default_scope:\s*"\K[^"]*' "$config" 2>/dev/null || true)"
+  if [ -z "$scope" ]; then
+    err "config.yml 中 digest.default_scope 为空。"
+    err "请先设置: 编辑 $PLUME_ROOT/config.yml → digest.default_scope"
+    err "或重新运行 ./install.sh --core 进行交互式配置"
+    exit 1
+  fi
+  local cron_marker="# plume-skills-digest:$scope"
+
+  # 读取 config 中的 cron_time（或使用命令行参数覆盖）
+  local config_cron cli_time
+  config_cron="$(grep -oP '^\s*cron_time:\s*"\K[^"]*' "$config" 2>/dev/null || echo "09:00")"
+  cli_time="${CRON_TIME:-}"
+  local use_time="${cli_time:-$config_cron}"
+  local target_hour="$((10#${use_time%%:*}))"
+  local target_min="$((10#${use_time##*:}))"
+
+  # 如果命令行指定了时间且与 config 不同，更新 config
+  if [ -n "$cli_time" ] && [ "$cli_time" != "$config_cron" ]; then
+    sed -i "s|^\(\s*cron_time:\).*|\1 \"$cli_time\"|" "$config"
+    ok "config.yml cron_time 已更新为 \"$cli_time\""
+  fi
+
+  # 时区转换
+  local cron_result
+  cron_result="$(python3 -c "
+import datetime, sys
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+target_tz_name = 'Asia/Shanghai'
+try:
+    import yaml
+    c = yaml.safe_load(open('$config'))
+    target_tz_name = c.get('locale', {}).get('timezone', 'Asia/Shanghai')
+except Exception:
+    pass
+
+target_tz = ZoneInfo(target_tz_name)
+local_tz = datetime.datetime.now().astimezone().tzinfo
+
+dt = datetime.datetime.combine(datetime.date.today(), datetime.time($target_hour, $target_min), tzinfo=target_tz)
+local_dt = dt.astimezone(local_tz)
+
+day_diff = (local_dt.date() - dt.date()).days
+if day_diff != 0:
+    note = f'跨天：{target_tz_name} {$target_hour:02d}:{$target_min:02d} = 本机前一天 {local_dt.strftime(\"%H:%M\")}'
+else:
+    note = f'{target_tz_name} {$target_hour:02d}:{$target_min:02d} = 本机 {local_dt.strftime(\"%H:%M\")}'
+
+print(f'{local_dt.minute} {local_dt.hour}|{target_tz_name}|{note}')
+" 2>&1)"
+  if [ -z "$cron_result" ] || echo "$cron_result" | grep -q "Traceback\|Error"; then
+    err "时区转换失败: $cron_result"
+    exit 1
+  fi
+
+  local cron_time tz_name tz_note
+  IFS='|' read -r cron_time tz_name tz_note <<< "$cron_result"
+
+  local project_dir
+  if [ -n "$BASE_DIR" ]; then
+    project_dir="$BASE_DIR"
+  else
+    project_dir="$(dirname "$PLUME_ROOT")"
+  fi
+
+  # 构造 cron 行
+  local date_cmd
+  if [[ "$(uname)" == "Darwin" ]]; then
+    date_cmd='$(date -v-1d +\%Y-\%m-\%d)'
+  else
+    date_cmd='$(date -d yesterday +\%Y-\%m-\%d)'
+  fi
+  local cron_line="$cron_time * * * cd $project_dir && claude -p \"/digest daily $date_cmd --scope $scope\" --output-format text >> $PLUME_ROOT/data/cron.log 2>&1 $cron_marker"
+
+  echo ""
+  info "日报 cron — scope: $scope（$tz_note）"
+
+  if $DRY_RUN; then
+    info "将写入 crontab:"
+    echo "  $cron_line"
+    return 0
+  fi
+
+  # 读取现有 crontab，移除当前 scope 的旧条目，追加新条目
+  local existing
+  existing="$(crontab -l 2>/dev/null || true)"
+  local filtered
+  filtered="$(echo "$existing" | grep -v "$cron_marker" || true)"
+
+  echo "${filtered:+$filtered
+}$cron_line" | crontab -
+
+  ok "crontab 已更新:"
+  echo "  $cron_line"
+
+  # 确保 cron 服务运行
+  if command -v systemctl &>/dev/null; then
+    if ! systemctl is-active --quiet cron 2>/dev/null && ! systemctl is-active --quiet crond 2>/dev/null; then
+      warn "cron 服务未运行。启动: sudo systemctl start cron"
+    fi
+  fi
+}
+
 # ─── 主入口 ───────────────────────────────────────────────────
 usage() {
   cat <<'EOF'
@@ -607,8 +832,8 @@ plume-skills 部署器
   ./install.sh --core [--base path] [--dry-run]  部署核心 skills + hooks
   ./install.sh --project [path] [--dry-run]      部署项目工作流 skills
   ./install.sh --update [--base path] [--dry-run] 同步 skills/hooks/权限
-  ./install.sh --update --clean-permissions       同步 + 清理非模板权限条目
   ./install.sh --repair [--base path]             修复搬迁后的路径引用
+  ./install.sh cron [HH:MM]                       写入日报 cron 到 crontab（自动时区转换）
   ./install.sh archive <keyword|--all>            归档项目数据用于迁移
   ./install.sh --help                             显示帮助
 
@@ -619,11 +844,15 @@ plume-skills 部署器
 示例:
   # 个人机器
   ./install.sh --core                        # → ~/.claude/
-  ./install.sh --project ~/my-project        # → ~/my-project/.claude/
+  ./install.sh --project ~/project-a        # → ~/project-a/.claude/
 
   # 共享服务器（项目级隔离）
   ./install.sh --core --base /root/plume     # → /root/plume/.claude/
   ./install.sh --project /root/plume         # → /root/plume/.claude/
+
+  # 写入日报 cron（scope 从 config 读取，同 scope 更新而非追加）
+  ./install.sh cron                          # 使用 config 的 cron_time
+  ./install.sh cron 21:00                    # 指定时间（同时更新 config）
 
 vendor/ 中的内容已随项目一起分发，无需额外拉取。
 EOF
@@ -632,6 +861,7 @@ EOF
 CMD=""
 PROJECT_PATH=""
 ARCHIVE_PATTERN=""
+CRON_TIME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -643,9 +873,13 @@ while [[ $# -gt 0 ]]; do
                   fi ;;
     --update)     CMD="update"; shift ;;
     --repair)     CMD="repair"; shift ;;
+    cron)         CMD="cron"; shift
+                  if [ "${1:-}" ] && [[ "$1" =~ ^[0-9] ]]; then
+                    CRON_TIME="$1"; shift
+                  fi ;;
     archive)      CMD="archive"; shift; ARCHIVE_PATTERN="${1:---all}"; shift 2>/dev/null || true ;;
     --base)       shift; BASE_DIR="${1:?--base 需要指定路径}"; shift ;;
-    --clean-permissions) CLEAN_PERMS=true; shift ;;
+    --clean-permissions) shift ;;  # 已废弃，三方 diff 自动处理
     --dry-run)    DRY_RUN=true; shift ;;
     --help|-h)    usage; exit 0 ;;
     *)            err "未知选项: $1"; usage; exit 1 ;;
@@ -662,5 +896,6 @@ case "$CMD" in
   project) cmd_project "$PROJECT_PATH" ;;
   update)  cmd_update ;;
   repair)  cmd_repair ;;
+  cron)    cmd_cron ;;
   archive) cmd_archive "$ARCHIVE_PATTERN" ;;
 esac
