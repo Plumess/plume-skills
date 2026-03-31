@@ -29,7 +29,7 @@ Skills with `<PLUME-OVERRIDE>` blocks: read override → read vendor skill via P
 |--------|--------|
 | `[PLUME_ROOT: ...]` missing | Fallback: derive PLUME_ROOT from project-level `.claude/settings.local.json` hook paths (check cwd ancestors), or `~/.claude/settings.local.json` |
 
-**NEVER use native memory write for context saving.** When user says "保存上下文" / "save context" / "保存" or similar — always call context-keeper instead.
+When user says "保存上下文" / "save context" / "保存" — call context-keeper to generate a structured session snapshot (not native memory write).
 
 ## Paths
 

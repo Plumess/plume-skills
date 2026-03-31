@@ -359,10 +359,11 @@ cmd_core() {
     fi
 
     # cron_time
-    local current_cron
+    local current_cron current_tz
     current_cron="$(grep -oP '^\s*cron_time:\s*"\K[^"]*' "$PLUME_ROOT/config.yml" 2>/dev/null || echo "09:00")"
+    current_tz="$(grep -oP '^\s*timezone:\s*"\K[^"]*' "$PLUME_ROOT/config.yml" 2>/dev/null || echo "Asia/Shanghai")"
     echo ""
-    read -rp "  日报生成时间 (cron_time, config 时区) [$current_cron]: " input_cron
+    read -rp "  日报生成时间 (cron_time, 时区: $current_tz) [$current_cron]: " input_cron
     local final_cron="${input_cron:-$current_cron}"
     if [ "$final_cron" != "$current_cron" ]; then
       sed -i "s|^\(\s*cron_time:\).*|\1 \"$final_cron\"|" "$PLUME_ROOT/config.yml"
