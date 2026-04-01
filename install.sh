@@ -786,12 +786,12 @@ print(f'{local_dt.minute} {local_dt.hour}|{target_tz_name}|{note}')
     project_dir="$(dirname "$PLUME_ROOT")"
   fi
 
-  # 构造 cron 行
+  # 构造 cron 行（日期用 config 时区计算，不用本机时区）
   local date_cmd
   if [[ "$(uname)" == "Darwin" ]]; then
-    date_cmd='$(date -v-1d +\%Y-\%m-\%d)'
+    date_cmd="\$(TZ=$tz_name date -v-1d +\\%Y-\\%m-\\%d)"
   else
-    date_cmd='$(date -d yesterday +\%Y-\%m-\%d)'
+    date_cmd="\$(TZ=$tz_name date -d yesterday +\\%Y-\\%m-\\%d)"
   fi
   local cron_line="$cron_time * * * cd $project_dir && claude -p \"/digest daily $date_cmd --scope $scope\" --output-format text >> $PLUME_ROOT/data/cron.log 2>&1 $cron_marker"
 
