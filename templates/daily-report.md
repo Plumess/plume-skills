@@ -23,8 +23,8 @@ TEMPLATE NOTES
 ==============
 - **Language**: config.yml → locale.language (default: zh-CN)
 - **Timezone**: config.yml → locale.timezone (default: Asia/Shanghai)
-- **时间窗口**: YYYY-MM-DD 当天 00:00:00 ~ 23:59:59（config 时区日历日）
-- **会话匹配**: 区间重叠（session_start <= 当日末 AND mtime >= 当日初），跨天会话会出现在多天日报中
+- **时间窗口**: YYYY-MM-DD cron_time ~ 次日 cron_time（config 时区，默认 06:00~06:00）
+- **会话匹配**: 区间重叠（session_start <= 窗口末 AND mtime >= 窗口初），跨天会话会出现在多天日报中
 - **定位**: 给领导和同事快速了解工作内容，简明扼要
 - **今日成果**: 每项一句话，最重要的排前面
 - **工作详情**: 按主题组织（不按时间流水），每个主题下按时间列工作点

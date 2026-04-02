@@ -28,10 +28,10 @@ Matching: Claude project slug **contains** scope keyword as substring.
 
 1. **session_start**: read the first line of the jsonl, extract `timestamp` field (ISO 8601 UTC)
 2. **session_end**: file mtime (use `stat` or `os.path.getmtime()`)
-3. **target window**: target date 00:00:00 ~ 23:59:59 in config timezone, converted to UTC
+3. **target window**: read `digest.cron_time` from config (default `06:00`). Window = target date `cron_time` ~ target date +1 day `cron_time` (in config timezone, converted to UTC). Example: cron_time=06:00, target=April 1 → April 1 06:00 ~ April 2 06:00
 4. **Match condition**: `session_start <= target_end AND session_end >= target_start`
 
-This correctly captures cross-day sessions: a session started yesterday and still active today will appear in both days' reports. Do NOT rely on mtime alone — it only reflects the last write time and misses sessions that started on the target date but are still active later.
+This correctly captures cross-day sessions. Do NOT rely on mtime alone — it only reflects the last write time and misses sessions that started on the target date but are still active later.
 
 ```bash
 # Example: get session_start from first line
