@@ -793,7 +793,15 @@ print(f'{local_dt.minute} {local_dt.hour}|{target_tz_name}|{note}')
   else
     date_cmd="\$(TZ=$tz_name date -d yesterday +\\%Y-\\%m-\\%d)"
   fi
-  local cron_line="$cron_time * * * cd $project_dir && claude -p \"/digest daily $date_cmd --scope $scope\" --output-format text >> $PLUME_ROOT/data/cron.log 2>&1 $cron_marker"
+  # 查找 claude CLI 绝对路径（cron 环境不加载 .bashrc，PATH 不完整）
+  local claude_bin
+  claude_bin="$(command -v claude 2>/dev/null || true)"
+  if [ -z "$claude_bin" ]; then
+    err "未找到 claude CLI。请先安装: https://docs.anthropic.com/en/docs/claude-code"
+    exit 1
+  fi
+
+  local cron_line="$cron_time * * * cd $project_dir && $claude_bin -p \"/digest daily $date_cmd --scope $scope\" --output-format text >> $PLUME_ROOT/data/cron.log 2>&1 $cron_marker"
 
   echo ""
   info "日报 cron — scope: $scope（$tz_note）"
