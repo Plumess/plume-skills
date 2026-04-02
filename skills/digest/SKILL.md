@@ -24,7 +24,21 @@ Matching: Claude project slug **contains** scope keyword as substring.
 
 ### Steps
 
-**Step 1** — Find scoped project dirs in `~/.claude/projects/`. For each, find jsonl files whose **file mtime** (last-modified timestamp) falls on target date — use `os.path.getmtime()` or `find -newer`/`ls -la` to check mtime, NOT the session ID or directory creation time. A session started on an earlier date but still active today will have today's mtime and must be included. Display matched projects + session counts to user for confirmation.
+**Step 1** — Find scoped project dirs in `~/.claude/projects/`. For each jsonl file, determine if the session was **active on the target date** using interval overlap:
+
+1. **session_start**: read the first line of the jsonl, extract `timestamp` field (ISO 8601 UTC)
+2. **session_end**: file mtime (use `stat` or `os.path.getmtime()`)
+3. **target window**: target date 00:00:00 ~ 23:59:59 in config timezone, converted to UTC
+4. **Match condition**: `session_start <= target_end AND session_end >= target_start`
+
+This correctly captures cross-day sessions: a session started yesterday and still active today will appear in both days' reports. Do NOT rely on mtime alone — it only reflects the last write time and misses sessions that started on the target date but are still active later.
+
+```bash
+# Example: get session_start from first line
+head -1 <session>.jsonl | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('timestamp',''))"
+```
+
+Display matched projects + session counts to user for confirmation (skip if cron/`-p` mode).
 
 **Step 2** — Gather content per active session (first available source):
 1. Session snapshots (`plume-context/sessions/<id>-<timestamp>.md`)

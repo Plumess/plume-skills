@@ -26,4 +26,4 @@ digest:
 
   # 日报自动生成时间（config 时区）
   # install.sh cron 会读取此值，自动转换为本机时区写入 crontab
-  cron_time: "09:00"
+  cron_time: "06:00"
