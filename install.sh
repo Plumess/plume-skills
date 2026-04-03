@@ -801,7 +801,7 @@ print(f'{local_dt.minute} {local_dt.hour}|{target_tz_name}|{note}')
     exit 1
   fi
 
-  local cron_line="$cron_time * * * cd $project_dir && $claude_bin -p \"/digest daily $date_cmd --scope $scope\" --output-format text >> $PLUME_ROOT/data/cron.log 2>&1 $cron_marker"
+  local cron_line="$cron_time * * * cd $project_dir && $claude_bin -p \"/digest daily $date_cmd --scope $scope\" --allowedTools \"Write($PLUME_ROOT/data/*) Read Glob Grep Bash(head:*) Bash(stat:*) Bash(ls:*) Bash(mkdir:*) Bash(find:*)\" --output-format text >> $PLUME_ROOT/data/cron.log 2>&1 $cron_marker"
 
   echo ""
   info "日报 cron — scope: $scope（$tz_note）"
