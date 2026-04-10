@@ -402,6 +402,7 @@ cmd_project() {
   if $need_core; then
     echo ""
     info "检测到核心 skills 不在用户级 (~/.claude/)，将一并安装:"
+    info "  - using-plume"
     info "  - context-keeper"
     info "  - digest"
     info "  - find-skills"
@@ -430,9 +431,7 @@ cmd_project() {
   if $need_core; then
     echo ""
     info "正在链接核心 skills..."
-    # plume 核心 skills（跳过 using-plume，它由 hook 注入读取，不需要 skill symlink）
     for skill in "${CORE_PLUME_SKILLS[@]}"; do
-      [[ "$skill" == "using-plume" ]] && continue
       symlink_skill "$PLUME_ROOT/skills/$skill" "$target/.claude/skills/$skill" "$skill"
     done
     # vendor skills
