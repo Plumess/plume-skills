@@ -94,6 +94,15 @@ cd /root/plume/plume-skills
 
 仅在 `/root/plume` 目录下启动的 Claude 会话才会加载这些 skills。
 
+**子项目安装**：如果 base 目录下有独立的子项目（如 `/root/plume/my-project/`），需要单独安装。Claude Code 只解析 `<cwd>/.claude/` 和 `~/.claude/`，中间层（`/root/plume/.claude/`）对子目录不可见。
+
+```bash
+# 子项目安装 — 自动检测并补装核心 skills + hooks
+./install.sh --project /root/plume/my-project
+```
+
+`--project` 会自动检测 `~/.claude/` 是否有核心 skills。如果没有（场景 B），会一并安装核心 skills（context-keeper、digest、find-skills、skill-creator）和 hooks 到子项目的 `.claude/` 中，确保 plume 框架在子项目内完整可用。重复执行是幂等的。
+
 ### 更新与维护
 
 Skills 内容通过 symlink 指向仓库文件，`git pull` 后自动生效。`--update` 和 `--repair` 处理部署层面的变化（hooks、权限、迁移）。

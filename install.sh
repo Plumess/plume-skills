@@ -385,6 +385,13 @@ cmd_project() {
     fi
   fi
 
+  # 检测核心 skills 是否对目标项目可见（通过 ~/.claude/）
+  # Claude Code 只解析 <cwd>/.claude/ 和 ~/.claude/，中间层不可见
+  local need_core=false
+  if [ ! -L "$HOME/.claude/skills/context-keeper" ] && [ ! -d "$HOME/.claude/skills/context-keeper" ]; then
+    need_core=true
+  fi
+
   info "安装项目 skills 到 $target/.claude/skills/"
   echo ""
 
@@ -392,6 +399,15 @@ cmd_project() {
   for skill in "${PROJECT_SKILLS[@]}"; do
     info "  - $skill"
   done
+  if $need_core; then
+    echo ""
+    info "检测到核心 skills 不在用户级 (~/.claude/)，将一并安装:"
+    info "  - context-keeper"
+    info "  - digest"
+    info "  - find-skills"
+    info "  - skill-creator"
+    info "  + hooks (SessionStart, UserPromptSubmit)"
+  fi
   echo ""
 
   if ! $DRY_RUN; then
@@ -409,10 +425,55 @@ cmd_project() {
   for skill in "${PROJECT_SKILLS[@]}"; do
     symlink_skill "$PLUME_ROOT/skills/$skill" "$target/.claude/skills/$skill" "$skill"
   done
+
+  # 核心 skills + hooks 补装（场景 B：核心装在中间层，子项目不可见）
+  if $need_core; then
+    echo ""
+    info "正在链接核心 skills..."
+    # plume 核心 skills（跳过 using-plume，它由 hook 注入读取，不需要 skill symlink）
+    for skill in "${CORE_PLUME_SKILLS[@]}"; do
+      [[ "$skill" == "using-plume" ]] && continue
+      symlink_skill "$PLUME_ROOT/skills/$skill" "$target/.claude/skills/$skill" "$skill"
+    done
+    # vendor skills
+    for entry in "${CORE_VENDOR_SKILLS[@]}"; do
+      local rel_path="${entry%%:*}"
+      local name="${entry##*:}"
+      local src="$PLUME_ROOT/$rel_path"
+      if [ -d "$src" ] && [ -f "$src/SKILL.md" ]; then
+        symlink_skill "$src" "$target/.claude/skills/$name" "$name"
+      fi
+    done
+  fi
   echo ""
 
+  # 权限同步
   info "合并权限配置..."
   sync_permissions "$target/.claude/settings.local.json" "$PLUME_ROOT/templates/settings.local.append.json"
+
+  # hooks 补装（核心不在用户级时，项目需要自带 hooks 才能激活框架）
+  if $need_core; then
+    local settings_file="$target/.claude/settings.local.json"
+    info "合并 hooks 配置..."
+    local hooks_resolved
+    hooks_resolved="$(sed "s|__PLUME_ROOT__|$PLUME_ROOT|g" "$PLUME_ROOT/hooks/hooks.json")"
+    if grep -q "hooks/session-start" "$settings_file" 2>/dev/null; then
+      info "  hooks 已存在，跳过"
+    else
+      if $DRY_RUN; then
+        info "  将合并 hooks 到 $settings_file"
+      else
+        if command -v jq &>/dev/null; then
+          local tmp
+          tmp="$(mktemp)"
+          jq -s '.[0] * .[1]' "$settings_file" <(echo "$hooks_resolved") > "$tmp" && mv "$tmp" "$settings_file"
+          ok "  hooks 已合并"
+        else
+          warn "  未找到 jq — 请手动将 hooks 合并到 $settings_file"
+        fi
+      fi
+    fi
+  fi
   echo ""
 
   ok "项目安装完成: $target"
