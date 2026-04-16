@@ -12,7 +12,7 @@
 
 ## 🎉 What's New in v3
 
-**全新简化版** — 基于 Claude Code 最新 **harness 自动 skill 索引**机制 + **Andrej Karpathy** 极简哲学，对原有框架做完全重构：
+**全新简化版** — 基于 最新 **harness**思想 + **Andrej Karpathy** 极简哲学，对原有框架做完全重构：
 
 - **抛弃 wrapper 强制链路**：原 16 个 wrapper + 2 vendor 浓缩为 **1 份常驻原则 + 4 个自研 skill**
 - **原则常驻取代 skill 堆叠**：karpathy 4 条核心原则 + Plume 3 条工作流原则 + Ask-Before-Persist gate 在 SessionStart 注入，Tier 0 永远在线
@@ -229,10 +229,6 @@ plume-skills/
 - `/digest report 用户认证相关的工作` — 自然语言语义匹配研究报告
 
 scope 对 `~/.claude/projects/` 下项目目录名做子串匹配，天然隔离公司/个人项目。
-
-## 设计演进
-
-完整设计讨论、架构取舍、token 预算核算见 [docs/slim-design.md](docs/slim-design.md)。该文档记录了从 v1（16 skill 堆叠）→ v2（wrapper essence）→ v3（原则 + 精品 skill）的完整演进理由与取舍。
 
 ## Credits
 
