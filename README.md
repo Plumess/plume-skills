@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">Plume-Skills</h1>
   <p align="center">
-    <strong>A lean Claude Code framework: behavior principles always-on, a few精品 skills on demand.</strong>
+    <strong>A lean Claude Code framework: behavior principles always-on, a few premium skills on demand.</strong>
   </p>
   <p align="center">
     Principles-first · Token-friendly · Scope-isolated install
