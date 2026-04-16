@@ -9,7 +9,7 @@ If you were dispatched as a subagent for a narrow task, skip this file entirely 
 
 # Plume Framework Mechanics
 
-This skill documents framework mechanics only. Behavior principles (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution, Plan-First, Completion Gate, Delegate with Intent, Ask-Before-Persist) are injected at session start and always in effect — do not re-read them here.
+This skill documents framework mechanics only. Behavior principles are injected at session start — do not re-read or re-document them here.
 
 ## PLUME_ROOT Signal
 

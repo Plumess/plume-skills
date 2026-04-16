@@ -7,13 +7,7 @@ description: "Use ONLY when user explicitly requests Socratic dialogue, guided t
 
 Helps the user clarify a fuzzy idea or find direction by having a chosen persona guide them through Socratic questioning.
 
-Positioned alongside Plan-First (Principle 5 in Tier 0) as the deepest/slowest mode of the three think-first options:
-
-| Mode | Trigger | Who proposes | Pace |
-|---|---|---|---|
-| **Plan-First default** | auto on non-trivial work | Claude offers 2–3 options | fast converge |
-| **Brainstorm** (explicit keyword) | `/brainstorm` or "头脑风暴" | Claude offers 4–5 options + deeper tradeoffs | medium |
-| **Socratic** (this skill) | `/socratic` or "苏格拉底式讨论" | **User articulates; Claude only questions** | slow, deep, exploratory |
+This is the slowest/deepest mode of Tier 0 Principle 5's three think-first options — see the principle for comparison against Plan-First default and Brainstorm.
 
 **Explicit trigger only.** If the user is merely uncertain but hasn't asked for this mode, do not activate — stay on Plan-First default.
 
@@ -70,9 +64,7 @@ End the dialogue when any of these fires:
 
 ### Step 5 — Optional output document
 
-If the dialogue produces a plan, apply **Ask-Before-Persist** (Tier 0 gate) — propose a save path and wait for confirmation.
-
-Default path suggestion: `<project-root>/docs/plume-skills/socratic/YYYY-MM-DD-<topic>.md`.
+If the dialogue produces a plan, apply **Ask-Before-Persist** (Tier 0 gate) — propose a save path and wait for confirmation. For the default save path, see `using-plume` → Project output default paths.
 
 Document structure:
 

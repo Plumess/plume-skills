@@ -50,9 +50,7 @@ Ask the user:
 - **Fix**: <concrete suggested change; can include a code example>
 ```
 
-**Step 4 — Also note compliance** (briefly). Mention what the code does well so the report is balanced — not every principle violation.
-
-**Step 5 — Present findings grouped by severity descending** (P0 first). Ask which P0/P1 items to fix now.
+**Step 4 — Present findings grouped by severity descending** (P0 first). Ask which P0/P1 items to fix now.
 
 ## Principles Checked
 
@@ -176,6 +174,4 @@ When the user pastes review comments received from others:
 
 ## Output Persistence
 
-Apply **Ask Before Persist** (Tier 0 gate) before writing a review report to disk.
-
-Default path suggestion: `<project-root>/docs/plume-skills/reviews/YYYY-MM-DD-<topic>.md`. State this path and wait for user confirmation before writing. Inline report in chat is fine without a save step.
+Apply **Ask Before Persist** (Tier 0 gate) before writing a review report to disk. For the default save path, see `using-plume` → Project output default paths. State the path and wait for user confirmation before writing. Inline report in chat is fine without a save step.
