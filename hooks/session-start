@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # plume-skills SessionStart hook
-# Injects using-plume guide + PLUME_ROOT into conversation context.
+# Injects hooks/principles.md (always-on Plume behavior principles) + PLUME_ROOT signal.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUME_ROOT="$(dirname "$SCRIPT_DIR")"
-SKILL_FILE="$PLUME_ROOT/skills/using-plume/SKILL.md"
+PRINCIPLES_FILE="$SCRIPT_DIR/principles.md"
 
-if [ ! -f "$SKILL_FILE" ]; then
+if [ ! -f "$PRINCIPLES_FILE" ]; then
   echo '{}'
   exit 0
 fi
 
-# Inject PLUME_ROOT so all skills can locate vendor/ and data/
-SKILL_CONTENT="[PLUME_ROOT: $PLUME_ROOT]
+# Prepend PLUME_ROOT signal to principles content
+INJECTED="[PLUME_ROOT: $PLUME_ROOT]
 
-$(cat "$SKILL_FILE")"
+$(cat "$PRINCIPLES_FILE")"
 
-# JSON-escape via python3 (needed for Unicode: CJK, em-dash, arrows in SKILL.md)
-ESCAPED="$(printf '%s' "$SKILL_CONTENT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')"
+# JSON-escape via python3 (needed for Unicode: CJK, em-dash, arrows)
+ESCAPED="$(printf '%s' "$INJECTED" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')"
 
 cat <<EOF
 {

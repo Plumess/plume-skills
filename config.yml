@@ -1,5 +1,5 @@
 # plume-skills 全局配置
-# plume_root 由 install.sh --core 自动写入
+# plume_root 由 install.sh 自动写入（与部署点对齐）
 plume_root: "/root/plume/plume-skills"
 
 # 本地化设置
@@ -12,11 +12,6 @@ locale:
   timezone: "Asia/Shanghai"
   # 生成文档语言：日报、研究报告、设计文档等人类可阅读文档均使用此语言
   language: "zh-CN"
-
-# 上下文快照管理
-context:
-  # 数据量上限（MB）：plume-context/ + 关联 jsonl 总大小超过此值时提醒清理
-  max_data_size_mb: 500
 
 digest:
   # 日报默认作用域：只检索 ~/.claude/projects/ 中 slug 包含此关键词的项目

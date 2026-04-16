@@ -1,49 +1,98 @@
 ---
 name: using-plume
-description: "System guide injected at session start. Do not invoke manually."
+description: "Framework mechanics reference — path conventions, PLUME_ROOT fallback, network policy, privacy/scope, optional wrapper extension pattern. Read on demand when handling IO, path resolution, or integrating external skills. Do not invoke for behavior — those principles are in SessionStart injection."
 ---
 
 <SUBAGENT-STOP>
-If you were dispatched as a subagent to execute a specific task, skip this guide entirely.
+If you were dispatched as a subagent for a narrow task, skip this file entirely unless the task explicitly involves path resolution, network handling, or wrapper extensions.
 </SUBAGENT-STOP>
 
-# Plume Skills Framework
+# Plume Framework Mechanics
 
-Skills give you structured capabilities. Invoke by name via the Skill tool. Load on demand — only read a skill when needed.
+This skill documents framework mechanics only. Behavior principles (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution, Plan-First, Completion Gate, Delegate with Intent, Ask-Before-Persist) are injected at session start and always in effect — do not re-read them here.
 
-## Priority
+## PLUME_ROOT Signal
 
-`User instruction > CLAUDE.md > <PLUME-OVERRIDE> in wrapper > vendor skill > system default`
+`[PLUME_ROOT: ...]` appears in your context via SessionStart and UserPromptSubmit hooks. It is the absolute path to the plume-skills repository root. Use it to resolve all framework file references.
 
-## Skill Invocation
+### Fallback (if signal missing)
 
-**If a skill MIGHT apply, invoke it BEFORE any response or action.** Even 1% chance means invoke it. Process skills first (brainstorming, debugging), then implementation skills (TDD, code review). Never skip because "it's simple" or "I remember what it says" — skills evolve.
+1. Check the current project-level `.claude/settings.local.json` for hook command paths. Walk up cwd ancestors if needed.
+2. If absent, check `~/.claude/settings.local.json`.
+3. Parse `"command"` under `hooks.SessionStart[].hooks[].command` — the containing directory of `hooks/session-start` is PLUME_ROOT.
+4. Report the derived value to the user before proceeding.
 
-## Wrapper Pattern
+## Path Conventions
 
-Skills with `<PLUME-OVERRIDE>` blocks: read override → read vendor skill via PLUME_ROOT → override wins on conflicts → vendor as-is elsewhere.
+### Framework paths (under PLUME_ROOT)
 
-## Context Signals
+| Path | Purpose |
+|---|---|
+| `$PLUME_ROOT/config.yml` | Framework config (locale, digest) |
+| `$PLUME_ROOT/templates/` | Shared templates (git-plan.md, daily-report.md, research-report.md) |
+| `$PLUME_ROOT/data/journal/` | Digest daily reports (output) |
+| `$PLUME_ROOT/data/reports/` | Digest research reports (output) |
+| `$PLUME_ROOT/.plume-install-state.json` | install.sh deploy marker (do not hand-edit) |
 
-| Signal | Action |
-|--------|--------|
-| `[PLUME_ROOT: ...]` missing | Fallback: derive PLUME_ROOT from project-level `.claude/settings.local.json` hook paths (check cwd ancestors), or `~/.claude/settings.local.json` |
+### Project output default paths (suggestions — always confirm via Ask-Before-Persist)
 
-When user says "保存上下文" / "save context" / "保存" — call context-keeper to generate a structured session snapshot (not native memory write).
+| Output type | Default path suggestion |
+|---|---|
+| Design specs (from Plan-First / brainstorm mode) | `<project-root>/docs/plume-skills/specs/YYYY-MM-DD-<topic>-design.md` |
+| Implementation plans (from Plan-First) | `<project-root>/docs/plume-skills/plans/YYYY-MM-DD-<topic>.md` |
+| Code review reports (from `code-review` skill) | `<project-root>/docs/plume-skills/reviews/YYYY-MM-DD-<topic>.md` |
+| Socratic dialogue outcomes (from `socratic-dialogue`) | `<project-root>/docs/plume-skills/socratic/YYYY-MM-DD-<topic>.md` |
 
-## Paths
+`<project-root>` = current working directory. Create the subdirectory if needed, but **always state the proposed path and wait for user confirmation before writing** (Ask-Before-Persist gate from Tier 0). The defaults above are suggestions, not commitments.
 
-`[PLUME_ROOT: ...]` in context = absolute path to plume-skills. Use for:
-- Vendor skills: `PLUME_ROOT/vendor/superpowers/<name>/SKILL.md`
-- Config / Templates: `PLUME_ROOT/config.yml`, `PLUME_ROOT/templates/`
-- Reports: `PLUME_ROOT/data/journal/`, `PLUME_ROOT/data/reports/`
-- Project output: `<project-root>/docs/plume-skills/{specs,plans}/`
-- Context data: `~/.claude/projects/<slug>/plume-context/` (`slug = pwd | sed 's|/|-|g'`)
+### Claude-native data paths (read-only for plume)
 
-## Network
+| Path | Content |
+|---|---|
+| `~/.claude/projects/<slug>/*.jsonl` | Session transcripts (digest source of truth) |
+| `~/.claude/projects/<slug>/memory/MEMORY.md` | Auto-memory index (Claude native) |
 
-After 2 timeout/connection failures on foreign resources: STOP retrying. Tell user "连接超时，可能需要检查代理配置", show the failed command, wait for user to handle manually.
+`slug = pwd | sed 's|/|-|g'` (keeps leading dash).
 
-## Privacy
+## Network Policy
 
-Project data isolated by Claude project slug. Use `--scope` keyword to aggregate across projects with matching path prefixes.
+After 2 consecutive timeout or connection failures on foreign resources (external URLs, non-local git remotes, package registries, etc.):
+- **STOP retrying**.
+- Tell the user: "连接超时，可能需要检查代理配置".
+- Show the exact failed command.
+- Wait for the user to handle the network issue manually.
+
+Do not attempt automatic proxy configuration or URL rewrites.
+
+## Privacy & Scope
+
+Project data is isolated by Claude project slug (`pwd | sed 's|/|-|g'`). Each project's data lives under `~/.claude/projects/<slug>/`.
+
+`digest` uses `--scope <keyword>` to aggregate across projects whose slug contains the keyword as a substring. Different scopes produce separate reports, providing natural isolation between work/personal/client contexts.
+
+## Optional Wrapper Extension Pattern
+
+**Not used by default in v3.** Plume's own skills (`using-plume`, `code-review`, `socratic-dialogue`, `digest`) are standalone. This pattern is documented only for the case where you want to integrate an external/community skill under plume's governance with project-level customizations.
+
+To create a wrapper:
+
+```markdown
+---
+name: <external-skill-name>
+description: "<your trigger phrasing>"
+---
+
+<PLUME-OVERRIDE>
+# Project-level customizations, these win on conflicts:
+- Locale: <from $PLUME_ROOT/config.yml>
+- Output path: <where to save>
+- Any other overrides
+</PLUME-OVERRIDE>
+
+Read and follow the external skill's complete content:
+`<absolute path to external SKILL.md>`
+
+Conflict resolution: PLUME-OVERRIDE wins; otherwise follow external skill as-is.
+```
+
+Place wrappers in `skills/<wrapper-name>/SKILL.md` alongside plume's own skills. The harness will auto-list them. No change to `install.sh` needed — symlink deployment handles new skill directories automatically on `--update`.
