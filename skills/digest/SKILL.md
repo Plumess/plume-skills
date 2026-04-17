@@ -5,7 +5,7 @@ description: "Use when user requests /digest, a daily summary, or a research rep
 
 # Digest
 
-Generates daily reports and research reports. Both source directly from jsonl — daily by timestamp slicing, research by topic scanning — with sub-agent delegation for the slicing / scanning work. MEMORY.md provides background context.
+Generates daily reports and research reports. Both source directly from jsonl — daily by per-line timestamp slicing, research by topic keyword scanning (main Claude reads jsonl itself, no sub-agent delegation). MEMORY.md provides background context.
 
 Read `$PLUME_ROOT/config.yml` for `locale` (timezone, language), `digest` (default_scope).
 
@@ -54,95 +54,34 @@ This correctly captures cross-day sessions. Do NOT rely on mtime alone — it mi
 
 Display matched projects + session counts to user for confirmation (skip if cron/`-p` mode).
 
-**Step 2 — Delegate slicing to sub-agents (Phase B)**
+**Step 2 — Slice each session by timestamp window**
 
-**Main Claude does NOT slice jsonl directly.** Slicing is repetitive data-processing work that pollutes the main context and risks leaking temp scripts into the user's workspace. Delegate to sub-agents following Tier 0 principle 7 (Delegate with Intent).
+**jsonl is the authoritative source. Always read it.** Main Claude slices directly — do not delegate. Each line in a jsonl carries its own `timestamp` field. The jsonl is append-only and contains the complete session history from first message to last — a cross-day session naturally appears in multiple daily reports with disjoint slices. **Tail-based reading is wrong for cross-day sessions.** Per-line timestamp filtering is the only correct mechanism.
 
-jsonl is the authoritative source. Each line carries its own `timestamp` field. The jsonl is append-only and spans the complete session from first message to last — a cross-day session appears in multiple daily reports with disjoint slices. **Tail-based reading is wrong for cross-day sessions.** Per-line timestamp filtering is the only correct mechanism.
+For each active session:
 
-### Scratch directory (mandatory)
+1. **Filter the jsonl** to lines whose `timestamp` falls within the target window `[target_start, target_end)`. This slice belongs to the target date's report.
+2. Summarize from the slice. Focus on user requests, decisions, files modified, outcomes.
+3. **Cross-check files actually modified**: if the slice mentions writing files, verify with `stat` that mtimes fall within the window. Catches anything the slice paraphrasing missed.
 
-Before dispatching any sub-agent, main Claude creates a unique scratch directory for this digest invocation:
-
-```
-DIGEST_SCRATCH_ROOT = $PLUME_ROOT/data/.tmp/digest-<YYYYMMDD-HHMMSS>/
-mkdir -p "$DIGEST_SCRATCH_ROOT"
-```
-
-This path is the **only** location sub-agents may create files in. The L3 inline fallback also uses it. After Step 3 finishes (report written or aborted), main Claude **must** `rm -rf "$DIGEST_SCRATCH_ROOT"`.
-
-### Batching rule
-
-- `N ≤ 5` sessions → one sub-agent per session, dispatched in parallel (single message, multiple Agent tool calls)
-- `N > 5` → group into `ceil(N/5)` sub-agents, each handling 3–5 sessions
-
-Use `subagent_type: "general-purpose"` with `model: "haiku"` for cost efficiency.
-
-### Agent prompt contract
-
-Each sub-agent receives:
-
-- **Goal**: Slice the given jsonl file(s) to the timestamp window and extract a structured summary.
-- **Context**: time window `[target_start, target_end)` in UTC ISO 8601; list of jsonl absolute paths; the mandatory scratch directory path `DIGEST_SCRATCH_ROOT`.
-- **Scope**: read jsonl line-by-line, filter by per-line `timestamp`, summarize the in-window slice only. Do not read anything outside the paths given.
-- **File-write restriction (HARD RULE)**: you **MUST NOT** create, write, or modify any file outside `DIGEST_SCRATCH_ROOT`. Any temp scripts, intermediate outputs, or helper files go inside that exact directory and nowhere else. Creating files in the user's main workspace (including `/root/plume/`, `/tmp/`, or the current working directory) is a protocol violation — if you cannot comply, return an error instead.
-- **Return format**: a single fenced ```json block with the exact schema below. No prose outside the block.
-
-```json
-{
-  "sessions": [
-    {
-      "session_id": "<filename without .jsonl>",
-      "project_slug": "<parent dir name>",
-      "window_start": "<UTC ISO>",
-      "window_end": "<UTC ISO>",
-      "line_count": 123,
-      "summary": "<2-6 sentence natural-language summary focused on user requests, decisions, files modified, outcomes>",
-      "files_modified": ["<absolute path>", "..."],
-      "decisions": ["<key decision 1>", "..."],
-      "is_self_referential_digest": false
-    }
-  ],
-  "schema_fingerprint": "timestamp,type,role,message.content[].text"
-}
-```
-
-`is_self_referential_digest: true` when the session's first user message is a `/digest` invocation (contains `<command-name>digest</command-name>` or starts with `/digest`). Main Claude uses this flag in Step 3 to skip the session without emitting any report entry.
-
-`schema_fingerprint` lists the fields the agent actually found in the jsonl. Main Claude compares against `expected_fields = {timestamp, type, role, message.content[].text}` and flags drift (see Fallback Chain below).
-
-### Cross-check after agents return
-
-For each session with `files_modified`, verify with `stat` that the file mtimes fall within the window. Catches paraphrasing errors in agent summaries. Also read MEMORY.md for project background (context only, not source of truth).
-
-### Fallback Chain
-
-If the sub-agent path fails at any layer, degrade to the next:
-
-| Layer | Trigger | Action |
-|---|---|---|
-| **L0 Main path** | Agent returns valid JSON, fingerprint matches expected | Aggregate and write report |
-| **L1 Retry** | JSON parse fails or required fields missing | Use `SendMessage` to the same agent asking for the exact schema — the agent keeps its slice context, no re-slicing needed |
-| **L2 Soft-parse** | After 2 retries still malformed | Treat agent's prose output as an unstructured summary; append `⚠ 部分会话摘要来自降级解析` at report bottom |
-| **L3 Inline fallback** | Agent dispatch fails entirely (infrastructure error) | Main Claude slices inline via Python into `DIGEST_SCRATCH_ROOT` (already created at Step 2 start, same directory sub-agents would have used). Cleanup happens at Step 3 end along with the normal path |
-
-### Schema drift handling
-
-If `schema_fingerprint` disagrees with expected:
-- **Superset** (agent found more fields than expected) → continue, log `⚠ jsonl schema drift detected: <diff>` at report bottom
-- **Missing critical field** (no `timestamp` or no `content`) → go straight to L3 inline fallback; the SKILL.md expected-fields list likely needs an update, flag this in the report
-
-**Step 3 — Aggregate, write report, cleanup**
-
-Aggregate all sub-agent outputs, skipping any session with `is_self_referential_digest: true`. Generate using `$PLUME_ROOT/templates/daily-report.md`. Write to `$PLUME_ROOT/data/journal/YYYY-MM-DD.md`. If file exists → **Report Update**.
-
-After the report is written (or the run aborts for any reason), **always** clean up:
+Use `python3 -c "..."` for filtering (already whitelisted). Avoid heredoc (`<<'PY'`) and `#` comments inside `-c` — both trigger sandbox patterns. Scratch files, if needed, go under `$PLUME_ROOT/data/.tmp/digest-<YYYYMMDD-HHMMSS>/` (whitelisted for Write / mkdir / rm); clean up at Step 3 end.
 
 ```bash
-rm -rf "$DIGEST_SCRATCH_ROOT"
+# Inline filter (one-liner, no comments in the -c string)
+python3 -c "import sys,json; path,s,e=sys.argv[1:]; \
+[print(l,end='') for l in open(path) \
+ if s<=(json.loads(l).get('timestamp','') or '')<e]" "$jsonl" "$start_utc" "$end_utc"
 ```
 
-> **Exclude self-referential digest work**: Sessions flagged `is_self_referential_digest: true` by sub-agents are omitted entirely — no entry, no count, no mention. Additionally, if a non-flagged session's slice turns out to describe only `/digest` command execution, treat it as noise at write time (do not emit "自动生成日报" / "Cron 触发 digest" style entries).
+Read MEMORY.md for project context (background only).
+
+> Why jsonl with per-line timestamp filtering: jsonl is the system-written ground truth. Tail is a hack that breaks for long sessions. Per-line timestamp slicing is the only mechanism that correctly handles both short single-day sessions and ultra-long multi-day sessions.
+
+**Step 3** — Generate using `$PLUME_ROOT/templates/daily-report.md`. Write to `$PLUME_ROOT/data/journal/YYYY-MM-DD.md`. If file exists → **Report Update**.
+
+If a scratch directory was created in Step 2, `rm -rf $PLUME_ROOT/data/.tmp/digest-<YYYYMMDD-HHMMSS>/` before exiting.
+
+> **Exclude self-referential digest work**: If a session's slice content is almost entirely a `/digest` command invocation and its execution trace, treat it as noise and omit it from the report — no entry, no count, no mention. The daily report describes user work, not the act of generating itself (e.g. do not emit "自动生成日报" / "Cron 触发 digest" style entries).
 
 ---
 
@@ -150,25 +89,17 @@ rm -rf "$DIGEST_SCRATCH_ROOT"
 
 Generate a research report on a topic across scoped sessions.
 
-> **Note**: after v3 slim-design removed context-keeper, this command no longer has snapshot/CONTEXT-INDEX to lean on — it works directly from jsonl via sub-agent delegation. Research reports are expected to be used infrequently.
+> **Note**: after v3 slim-design removed context-keeper, this command no longer has snapshots/CONTEXT-INDEX to lean on — main Claude scans jsonl directly. Research reports are expected to be used infrequently.
 
 ### Steps
 
-**Step 1 — Enumerate scoped jsonls** (same Phase A logic as daily, no window filter — cover all jsonls in scope regardless of date).
+**Step 1** — Enumerate scoped jsonls (same as daily Step 1, no window filter — cover all jsonls in scope regardless of date).
 
-**Step 2 — Delegate topic scanning to sub-agents**
+**Step 2** — For each jsonl, grep for topic keywords to locate relevant exchanges, then read those line ranges. Read MEMORY.md for background.
 
-Batch the jsonl list the same way as daily (`N ≤ 5` one-per-agent parallel; `N > 5` grouped). Each agent receives:
-- **Goal**: identify lines/exchanges in each jsonl relevant to the topic keywords.
-- **Return format**: fenced JSON `{ "matches": [{ "session_id", "snippet", "timestamp", "relevance": "high|medium|low" }] }`
+If the user gave no argument, surface a short list of topic clusters derived from recent sessions and let the user pick.
 
-If the user gave no argument, first run a lightweight agent pass asking "cluster the main topics across these jsonls", present clusters to user, then proceed with the chosen cluster.
-
-**Step 3 — Write report**
-
-Main Claude aggregates matches, reads MEMORY.md for background, and generates using `$PLUME_ROOT/templates/research-report.md`. Write to `$PLUME_ROOT/data/reports/<topic-slug>.md`. If file exists → **Report Update**.
-
-Same Fallback Chain (L1 retry / L2 soft-parse / L3 inline) as daily applies.
+**Step 3** — Generate using `$PLUME_ROOT/templates/research-report.md`. Write to `$PLUME_ROOT/data/reports/<topic-slug>.md`. If file exists → **Report Update**.
 
 ---
 
@@ -192,8 +123,8 @@ Research merge: 核心发现 merge → 关键认知 keep all → 结论与建议
 | Failure | Recovery |
 |---------|----------|
 | No active sessions for date | Report "No activity found." |
-| In-window slice exceeds ~1500 lines | Instruct the sub-agent in its prompt to summarize more aggressively (tool calls / file writes / decisions only); agent context is isolated so verbosity doesn't hurt main |
+| In-window slice exceeds ~1500 lines | Grep the slice for tool calls / file writes / decisions and summarize selectively; don't read the whole slice verbatim |
 | Cross-day session: which day owns it? | Both. Each day's report shows that day's timestamp slice; slices are disjoint and complementary |
 | Session listing seems suspiciously short | Re-enumerate with non-recursive `ls` + `wc -l` cross-check |
-| Sub-agent dispatch fails / schema drift / malformed JSON | Follow the Fallback Chain in Step 2 (L1 retry → L2 soft-parse → L3 inline `$PLUME_ROOT/data/.tmp/`) |
+| `python3 -c` string gets rejected (sandbox pattern) | Rephrase to avoid `#` comments and heredoc; if still blocked, ask user — do NOT write a helper `.py` to the workspace |
 | Write fails | Output report to chat |

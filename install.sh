@@ -180,22 +180,27 @@ sync_permissions() {
     return 0
   fi
 
+  # 模板中的 __PLUME_ROOT__ 占位符在此处解析为真实路径（与 sync_hooks 同机制）
+  local template_resolved; template_resolved="$(mktemp)"
+  sed "s|__PLUME_ROOT__|$PLUME_ROOT|g" "$template" > "$template_resolved"
+
   # 首次安装：target 不存在
   if [ ! -f "$target" ]; then
     if $DRY_RUN; then
       info "  将从模板创建 $target"
     else
-      cp "$template" "$target"
+      cp "$template_resolved" "$target"
       mkdir -p "$(dirname "$manifest")"
-      cp "$template" "$manifest"
+      cp "$template_resolved" "$manifest"
       ok "  已创建 $target"
     fi
+    rm -f "$template_resolved"
     return 0
   fi
 
   # 快照不存在（旧版升级）→ 视模板为旧快照，首次 update 不删任何条目
   local manifest_file="$manifest"
-  [ -f "$manifest_file" ] || manifest_file="$template"
+  [ -f "$manifest_file" ] || manifest_file="$template_resolved"
 
   local diff_info
   diff_info="$(jq -s '
@@ -210,7 +215,7 @@ sync_permissions() {
       add: ($to_add | length),
       result: (($cleaned + $to_add) | unique)
     }
-  ' "$target" "$template" "$manifest_file" 2>/dev/null || echo '{"stale":0,"add":0,"result":[]}')"
+  ' "$target" "$template_resolved" "$manifest_file" 2>/dev/null || echo '{"stale":0,"add":0,"result":[]}')"
 
   local stale_count add_count
   stale_count="$(echo "$diff_info" | jq '.stale')"
@@ -218,13 +223,15 @@ sync_permissions() {
 
   if [ "$stale_count" = "0" ] && [ "$add_count" = "0" ]; then
     info "  权限已是最新"
-    [ ! -f "$manifest" ] && ! $DRY_RUN && { mkdir -p "$(dirname "$manifest")"; cp "$template" "$manifest"; }
+    [ ! -f "$manifest" ] && ! $DRY_RUN && { mkdir -p "$(dirname "$manifest")"; cp "$template_resolved" "$manifest"; }
+    rm -f "$template_resolved"
     return 0
   fi
 
   if $DRY_RUN; then
     [ "$stale_count" != "0" ] && info "  将移除 $stale_count 条旧版 plume 权限"
     [ "$add_count" != "0" ] && info "  将新增 $add_count 条权限"
+    rm -f "$template_resolved"
     return 0
   fi
 
@@ -234,7 +241,8 @@ sync_permissions() {
   rm -f "$tmp"
 
   mkdir -p "$(dirname "$manifest")"
-  cp "$template" "$manifest"
+  cp "$template_resolved" "$manifest"
+  rm -f "$template_resolved"
 
   local msg=""
   [ "$stale_count" != "0" ] && msg="移除 $stale_count 条旧版"
