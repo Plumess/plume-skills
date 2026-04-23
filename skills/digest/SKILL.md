@@ -28,9 +28,18 @@ Matching: Claude project slug **contains** scope keyword as substring.
 
 **Step 1 — Enumerate main session jsonls (top-level only)**
 
-Find scoped project dirs in `~/.claude/projects/`. For each project, enumerate **only top-level `*.jsonl`** as main session files. Do NOT recurse — `subagents/agent-*.jsonl` are sub-agent traces and must be excluded.
+First **discover scoped project dirs** in `~/.claude/projects/`, then for each matched project enumerate **only top-level `*.jsonl`** as main session files. Do NOT recurse — `subagents/agent-*.jsonl` are sub-agent traces and must be excluded.
 
-> ⚠️ Do NOT use the Glob tool for this step. Glob recurses into subdirectories and has a result cap; in projects with many subagent files, truncation will silently drop the most recent main sessions. Always enumerate via Bash/Python with non-recursive listing:
+> ⚠️ Do NOT use the Glob tool for **either** the dir-discovery step or the jsonl-enumeration step. Glob recurses into subdirectories and has a result cap; projects with many subagent files (one project can have dozens) will eat the cap and silently drop sibling project dirs from discovery AND drop the most recent main session jsonls from enumeration. Both layers have the same failure mode. Always use non-recursive `ls` / `os.listdir`:
+>
+> ```bash
+> # Discover scoped project dirs (non-recursive, grep by slug substring)
+> ls -1 ~/.claude/projects/ | grep -i <scope>
+> ```
+>
+> If sandbox rejects the pipe as multi-op, split into two steps or use `python3 -c "import os; [print(p) for p in os.listdir(...) if '<scope>' in p.lower()]"`. **Never** fall back to `Glob` — a truncated list is indistinguishable from a complete one if you don't look for the truncation marker.
+>
+> Then, for each matched project, enumerate its jsonls non-recursively:
 
 ```bash
 # Preferred: one-shot enumeration with start timestamp + mtime, sorted by mtime desc
@@ -50,7 +59,10 @@ For each main session jsonl, determine if the session was **active on the target
 
 This correctly captures cross-day sessions. Do NOT rely on mtime alone — it misses sessions that started on the target date but are still active later.
 
-**Sanity check**: After enumeration, verify the count matches a direct directory listing (`ls ~/.claude/projects/<slug>/*.jsonl | wc -l`). If a session you'd expect (e.g. the current one) is missing, re-enumerate — never trust a partial list.
+**Sanity checks** (both required):
+
+1. **Scoped dir count**: re-run the dir-discovery command (`ls -1 ~/.claude/projects/ | grep -i <scope>`) and confirm the matched slug list matches what you're about to process. If you didn't obtain the list by the dir-discovery command above (e.g. you inferred it from some other output), redo it now — inferred lists are suspect.
+2. **Per-project jsonl count**: for each matched slug, verify the jsonl count matches a direct directory listing (`ls ~/.claude/projects/<slug>/*.jsonl | wc -l`). If a session you'd expect (e.g. the current one) is missing, re-enumerate — never trust a partial list.
 
 Display matched projects + session counts to user for confirmation (skip if cron/`-p` mode).
 
@@ -126,5 +138,6 @@ Research merge: 核心发现 merge → 关键认知 keep all → 结论与建议
 | In-window slice exceeds ~1500 lines | Grep the slice for tool calls / file writes / decisions and summarize selectively; don't read the whole slice verbatim |
 | Cross-day session: which day owns it? | Both. Each day's report shows that day's timestamp slice; slices are disjoint and complementary |
 | Session listing seems suspiciously short | Re-enumerate with non-recursive `ls` + `wc -l` cross-check |
+| `Glob` output ends with "Results are truncated" | Immediately abandon Glob for this step — a truncated list is unreliable. Redo with `ls` / `os.listdir`. Applies to both dir-discovery and jsonl-enumeration layers |
 | `python3 -c` string gets rejected (sandbox pattern) | Rephrase to avoid `#` comments and heredoc; if still blocked, ask user — do NOT write a helper `.py` to the workspace |
 | Write fails | Output report to chat |
