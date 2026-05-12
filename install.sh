@@ -17,6 +17,7 @@ PLUME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=false
 ASSUME_YES=false
 BASE_DIR=""
+USE_USER_LEVEL=false   # --global 显式装到 ~/.claude/ 时为 true
 
 # ─── v3 Skill 清单（平铺，无 core/project 分流）────────────
 V3_SKILLS=(using-plume code-review socratic-dialogue digest)
@@ -29,11 +30,19 @@ V3_SKILLS=(using-plume code-review socratic-dialogue digest)
 # using-git-worktrees, find-skills, skill-creator
 
 # ─── 核心路径计算 ─────────────────────────────────────────────
+# 优先级: --base 显式路径 > --global (~/.claude/) > 默认 base-level (PLUME_ROOT 父目录)
+#
+# 默认从 user-level 改为 base-level 的原因:
+# Claude Code 规则下 user-level (personal) 永远覆盖 project-level (project) 同名 skill,
+# 因此装在 user-level 会让所有 base-level 隔离失效。默认装到本仓库父目录的 .claude/
+# 实现多 clone 天然隔离, 想全机生效请显式 --global。
 claude_dir() {
   if [ -n "$BASE_DIR" ]; then
     echo "$BASE_DIR/.claude"
-  else
+  elif $USE_USER_LEVEL; then
     echo "$HOME/.claude"
+  else
+    echo "$(dirname "$PLUME_ROOT")/.claude"
   fi
 }
 
@@ -86,13 +95,123 @@ is_installed() {
 }
 
 # ─── Scope guard ─────────────────────────────────────────────
+# 检查当前 deploy_root 的 marker:
+#   - 不存在 marker → 干净, 通过
+#   - 存在且 plume_root == 本仓库 → 通过 (升级/重装本仓库的同一 scope)
+#   - 存在且 plume_root != 本仓库 → exit 1 (该 scope 被另一份占用, 拒绝静默覆盖)
 scope_guard() {
-  local prev; prev="$(read_marker | jq -r '.deploy_root // empty' 2>/dev/null || true)"
+  local prev_deploy_root; prev_deploy_root="$(read_marker | jq -r '.deploy_root // empty' 2>/dev/null || true)"
+  local prev_plume_root;  prev_plume_root="$(read_marker | jq -r '.plume_root // empty' 2>/dev/null || true)"
   local current; current="$(claude_dir)"
-  if [ -n "$prev" ] && [ "$prev" != "$current" ]; then
-    err "Scope 不匹配！marker 记录 deploy_root=$prev，当前计算=$current"
-    err "若要切换部署点，先在原部署点执行 --update 清理，或手动删除 $prev/.plume-install-state.json"
+
+  # marker 不存在 → 干净
+  [ -z "$prev_deploy_root" ] && return 0
+
+  # marker 存在但 deploy_root 字段与当前计算不符 → 异常 (手动改过 marker 或 fs)
+  if [ "$prev_deploy_root" != "$current" ]; then
+    err "Scope 状态异常: marker 记录 deploy_root=$prev_deploy_root, 当前计算=$current"
+    err "可能是手动改了 marker 或 fs。请检查 $current/.plume-install-state.json"
     exit 1
+  fi
+
+  # 同一 deploy_root 被另一份 plume-skills 占用 → 拒绝
+  if [ -n "$prev_plume_root" ] && [ "$prev_plume_root" != "$PLUME_ROOT" ]; then
+    err "该 scope 已被另一份 plume-skills 占用:"
+    err "   现有 marker plume_root: $prev_plume_root"
+    err "   本次仓库:              $PLUME_ROOT"
+    err ""
+    err "需要人工裁决, 可选:"
+    err "   (a) 先在那份仓库下卸载: cd $prev_plume_root && ./install.sh --uninstall $(scope_flag_hint)"
+    err "   (b) 换到其他 scope: ./install.sh --base /opt/another"
+    exit 1
+  fi
+}
+
+# scope_guard 报错时给用户的卸载命令提示
+scope_flag_hint() {
+  if [ -n "$BASE_DIR" ]; then
+    echo "--base $BASE_DIR"
+  elif $USE_USER_LEVEL; then
+    echo "--global"
+  else
+    echo ""
+  fi
+}
+
+# ─── Sanity check: 检测 user-level 是否被其他仓库占用 ─────────
+# 仅在装 base-level 时调用。检测到冲突时强警告 (Claude Code 加载规则:
+# user-level 永远覆盖 project-level, 残留会让本次 base 安装失效)
+sanity_check_user_level_residue() {
+  $USE_USER_LEVEL && return 0   # 装 user-level 本身不查这个
+
+  local user_skills="$HOME/.claude/skills"
+  [ -d "$user_skills" ] || return 0
+
+  local conflicting=()
+  local self_residue=()
+  for skill in "${V3_SKILLS[@]}"; do
+    local link="$user_skills/$skill"
+    [ -L "$link" ] || continue
+    local target; target="$(readlink -f "$link" 2>/dev/null || true)"
+    [ -z "$target" ] && continue
+    # 提取仓库根: target 形如 <repo>/skills/<name>
+    if [[ "$target" == */skills/"$skill" ]]; then
+      local repo_root; repo_root="${target%/skills/$skill}"
+      if [ "$repo_root" = "$PLUME_ROOT" ]; then
+        self_residue+=("$skill")
+      else
+        conflicting+=("$skill → $repo_root")
+      fi
+    fi
+  done
+
+  if [ ${#conflicting[@]} -gt 0 ]; then
+    echo ""
+    warn "⚠️  Sanity check — user-level 残留警告:"
+    warn "   ~/.claude/skills/ 下检测到另一份 plume-skills 的同名 skill:"
+    for c in "${conflicting[@]}"; do
+      warn "     $c"
+    done
+    warn ""
+    warn "   Claude Code 规则: user-level (personal) 永远覆盖 project-level (project)"
+    warn "   后果: 本次 base-level 安装的同名 skill 不会被 Claude Code 加载"
+    warn "   修复: 在占用方仓库下跑 ./install.sh --uninstall --global"
+    warn "         然后回本仓库跑 ./install.sh --update"
+    echo ""
+  fi
+
+  if [ ${#self_residue[@]} -gt 0 ]; then
+    info "  备注: ~/.claude/skills/ 下有指向本仓库的残留 (${self_residue[*]}),"
+    info "        可能是历史 --global 安装。如不需要全机生效, 跑 ./install.sh --uninstall --global"
+  fi
+}
+
+# ─── Sanity check: --global 安装前的强警告 + 用户确认 ─────────
+sanity_check_global_install() {
+  $USE_USER_LEVEL || return 0
+
+  echo ""
+  warn "⚠️  WARNING — --global 安装注意事项:"
+  warn "   Claude Code 规则: user-level (personal) 永远覆盖 project-level (project)"
+  warn "   后果: 任何用 ./install.sh (默认 base-level) 装的其他 plume-skills 仓库,"
+  warn "         其同名 skill 都会被本次 user-level 安装静默覆盖"
+  warn "   推荐: 仅在你确认只会有一份 plume-skills clone 时使用 --global"
+  warn "         多仓库共存请用默认 ./install.sh (base-level)"
+  echo ""
+
+  if $DRY_RUN; then
+    info "  [dry-run] 跳过确认"
+    return 0
+  fi
+  if $ASSUME_YES; then
+    info "  [--yes] 自动确认"
+    return 0
+  fi
+
+  read -rp "继续 --global 安装？[y/N] " confirm
+  if [[ ! "$confirm" =~ ^[Yy] ]]; then
+    info "已取消。建议改用默认: ./install.sh (无 --global, 自动装到本仓库父目录)"
+    exit 0
   fi
 }
 
@@ -475,6 +594,8 @@ scan_config_stale_fields() {
 
 # ─── 命令：install（新装或自动转 update） ─────────────────────
 cmd_install() {
+  scope_guard
+
   local cd; cd="$(claude_dir)"
 
   if is_installed; then
@@ -484,7 +605,20 @@ cmd_install() {
     return 0
   fi
 
+  # 装 user-level (--global) 前的强警告 + 二次确认
+  sanity_check_global_install
+
+  local scope_label
+  if [ -n "$BASE_DIR" ]; then
+    scope_label="custom scope --base $BASE_DIR"
+  elif $USE_USER_LEVEL; then
+    scope_label="user-level (~/.claude/, 全机生效)"
+  else
+    scope_label="base-level (仅 cwd 在 $(dirname "$PLUME_ROOT")/ 下时生效)"
+  fi
+
   info "全新安装 plume-skills v3 → $cd/skills/"
+  info "  scope:  $scope_label"
   info "  skills: ${V3_SKILLS[*]}"
   info "  hooks:  SessionStart + UserPromptSubmit"
   echo ""
@@ -515,6 +649,9 @@ cmd_install() {
   write_plume_root
   write_marker
   echo ""
+
+  # 装完后扫 user-level 残留 (装 base-level 时才有意义)
+  sanity_check_user_level_residue
 
   ok "安装完成。"
   interactive_digest_config
@@ -562,6 +699,8 @@ cmd_update() {
   write_plume_root
   write_marker
   echo ""
+
+  sanity_check_user_level_residue
 
   ok "更新完成。"
 }
@@ -631,6 +770,174 @@ cmd_repair() {
   done
 
   ok "修复完成。"
+}
+
+# ─── 命令：uninstall（卸载指定 scope） ─────────────────────────
+cmd_uninstall() {
+  local cd; cd="$(claude_dir)"
+  local mf; mf="$(marker_file)"
+
+  # 必须有 marker 或 skills 目录之一
+  if [ ! -f "$mf" ] && [ ! -d "$cd/skills" ]; then
+    err "未在 $cd 检测到 plume-skills 安装 (无 marker, 无 skills/)"
+    exit 1
+  fi
+
+  # 若有 marker, 验证指向本仓库
+  if [ -f "$mf" ]; then
+    local marker_plume; marker_plume="$(read_marker | jq -r '.plume_root // empty' 2>/dev/null || true)"
+    if [ -n "$marker_plume" ] && [ "$marker_plume" != "$PLUME_ROOT" ]; then
+      err "$cd 部署点 marker 指向其他仓库:"
+      err "   marker plume_root: $marker_plume"
+      err "   本次仓库:          $PLUME_ROOT"
+      err "请在 $marker_plume 下跑 ./install.sh --uninstall [对应旗]"
+      exit 1
+    fi
+  fi
+
+  echo ""
+  info "即将卸载 plume-skills 部署:"
+  info "  scope:  $cd"
+  info "  仓库:   $PLUME_ROOT"
+  echo ""
+  info "将删除:"
+  for skill in "${V3_SKILLS[@]}"; do
+    [ -L "$cd/skills/$skill" ] && info "  - $cd/skills/$skill"
+  done
+  [ -f "$cd/settings.local.json" ] && info "  - $cd/settings.local.json 中的 hooks 段 + plume 权限"
+  [ -f "$mf" ] && info "  - $mf"
+  echo ""
+  info "保留: $cd/settings.local.json 中的其他配置, data/, config.yml, 仓库源文件"
+  echo ""
+
+  if $DRY_RUN; then
+    info "  [dry-run] 不执行删除"
+    return 0
+  fi
+  if ! $ASSUME_YES; then
+    read -rp "确认卸载？[y/N] " confirm
+    [[ "$confirm" =~ ^[Yy] ]] || { info "已取消"; exit 0; }
+  fi
+
+  # 删 skills symlinks
+  for skill in "${V3_SKILLS[@]}"; do
+    local link="$cd/skills/$skill"
+    if [ -L "$link" ]; then
+      rm -f "$link" && ok "  $skill — 已删除"
+    fi
+  done
+
+  # 清空 settings.local.json 中 plume 部分 (hooks + 来自 manifest 的权限)
+  local settings_file="$cd/settings.local.json"
+  local manifest; manifest="$(permissions_manifest)"
+  if [ -f "$settings_file" ] && command -v jq &>/dev/null; then
+    local tmp; tmp="$(mktemp)"
+    if [ -f "$manifest" ]; then
+      # 同时清 hooks 段 + 权限段中来自 manifest 的条目
+      jq -s '
+        (.[0] | del(.hooks)) as $base |
+        (.[1].permissions.allow // []) as $plume_perms |
+        ($base.permissions.allow // []) as $current_perms |
+        ($current_perms - $plume_perms) as $remaining |
+        $base * { permissions: { allow: $remaining } }
+      ' "$settings_file" "$manifest" > "$tmp" && mv "$tmp" "$settings_file"
+      ok "  settings.local.json — hooks 段 + plume 权限已清"
+    else
+      # 无 manifest, 只清 hooks 段
+      jq 'del(.hooks)' "$settings_file" > "$tmp" && mv "$tmp" "$settings_file"
+      ok "  settings.local.json — hooks 段已清 (无 manifest, 权限段保留)"
+    fi
+  fi
+
+  # 删 manifest
+  [ -f "$manifest" ] && rm -f "$manifest" && ok "  权限 manifest 已删除"
+
+  # 删 marker
+  [ -f "$mf" ] && rm -f "$mf" && ok "  marker 已删除"
+
+  echo ""
+  ok "卸载完成 — scope $cd"
+  info "本仓库 ($PLUME_ROOT) 源文件未动。可重新跑 ./install.sh 或换 scope。"
+}
+
+# ─── 命令：doctor（诊断当前所有 scope 状态） ─────────────────
+cmd_doctor() {
+  info "plume-skills 部署诊断"
+  echo ""
+  info "本仓库 PLUME_ROOT: $PLUME_ROOT"
+  echo ""
+
+  # 待扫的 scope: user-level + 本仓库父目录 (base-level 默认位置)
+  local base_default; base_default="$(dirname "$PLUME_ROOT")"
+  local scopes=("$HOME/.claude" "$base_default/.claude")
+  local labels=("user-level (~/.claude/)" "base-level ($base_default/.claude/)")
+
+  local user_repo="" base_repo=""
+
+  local i
+  for i in 0 1; do
+    local scope="${scopes[$i]}"
+    local label="${labels[$i]}"
+
+    if [ ! -d "$scope/skills" ] && [ ! -f "$scope/.plume-install-state.json" ]; then
+      info "  [ ] $label — 未安装"
+      continue
+    fi
+
+    local mf="$scope/.plume-install-state.json"
+    local marker_plume="(无 marker)"
+    if [ -f "$mf" ]; then
+      marker_plume="$(jq -r '.plume_root // "?"' "$mf" 2>/dev/null || echo "?")"
+    fi
+    [ "$i" = "0" ] && user_repo="$marker_plume"
+    [ "$i" = "1" ] && base_repo="$marker_plume"
+
+    if [ "$marker_plume" = "$PLUME_ROOT" ]; then
+      ok "  [✓] $label — 本仓库已装"
+    elif [ "$marker_plume" = "(无 marker)" ]; then
+      warn "  [?] $label — 有 skills/ 但无 marker (异常状态)"
+    else
+      info "  [○] $label — 装的是另一份: $marker_plume"
+    fi
+
+    local skill
+    for skill in "${V3_SKILLS[@]}"; do
+      local link="$scope/skills/$skill"
+      if [ -L "$link" ]; then
+        local t; t="$(readlink "$link" 2>/dev/null || echo '?')"
+        if [ ! -e "$link" ]; then
+          warn "       $skill → $t  (断链!)"
+        else
+          info "       $skill → $t"
+        fi
+      fi
+    done
+  done
+
+  echo ""
+  info "Claude Code 加载规则: enterprise > personal (user-level) > project (base-level)"
+  echo ""
+
+  # 错配检测
+  if [ -n "$user_repo" ] && [ "$user_repo" != "(无 marker)" ] && [ -n "$base_repo" ] && [ "$base_repo" != "(无 marker)" ]; then
+    if [ "$user_repo" != "$base_repo" ]; then
+      warn "⚠️  user-level 与 base-level 装着不同仓库:"
+      warn "   user-level → $user_repo"
+      warn "   base-level → $base_repo"
+      warn "   实际加载: user-level 那份 (base-level 同名 skill 被覆盖)"
+      warn ""
+      warn "   若你想用 base-level 那份生效, 卸 user-level:"
+      warn "     cd $user_repo && ./install.sh --uninstall --global"
+    fi
+  fi
+
+  # 推荐 cwd
+  if [ "$base_repo" = "$PLUME_ROOT" ] && [ -z "$user_repo" -o "$user_repo" = "(无 marker)" ]; then
+    info "推荐工作 cwd: $base_default/ 或其子目录 (此时 Claude Code 才会加载本仓库 skills)"
+  fi
+
+  echo ""
+  info "诊断完成。"
 }
 
 # ─── 命令：archive（打包 data/） ───────────────────────────────
@@ -777,44 +1084,64 @@ usage() {
 plume-skills v3 部署器
 
 用法:
-  ./install.sh [--base <path>] [--dry-run]           全新安装（已装自动转 update）
-  ./install.sh --update [--base <path>] [--dry-run]  同步 skills / hooks / 权限 / 清遗留
-  ./install.sh --repair [--base <path>] [--dry-run]  全量重建（适合目录搬迁后）
-  ./install.sh cron [HH:MM]                          写 digest 日报 cron
-  ./install.sh archive <keyword|--all>               归档 data/ 项目数据
-  ./install.sh --help                                显示帮助
+  ./install.sh [--dry-run]                            全新安装到 base-level (默认, 见下)
+  ./install.sh --global [--dry-run]                   全新安装到 user-level (~/.claude/, 带强警告)
+  ./install.sh --base <path> [--dry-run]              全新安装到指定路径 <path>/.claude/
+  ./install.sh --update [scope-flag] [--dry-run]      同步 skills / hooks / 权限
+  ./install.sh --repair [scope-flag] [--dry-run]      全量重建
+  ./install.sh --uninstall [scope-flag] [--dry-run]   卸载指定 scope (保留源文件)
+  ./install.sh --doctor                               诊断所有 scope 状态 + 错配检测
+  ./install.sh cron [HH:MM]                           写 digest 日报 cron
+  ./install.sh archive <keyword|--all>                归档 data/ 项目数据
+  ./install.sh --help                                 显示帮助
+
+  其中 [scope-flag] 是 --global / --base <path> 之一, 不传则用默认 base-level。
 
 选项:
-  --base <path>   部署点改为 <path>/.claude/ 而非 ~/.claude/（独立 scope）
-  --dry-run       预览不执行（仍会列出即将删除的项目）
-  --yes           自动确认所有删除（跳过交互提示，非交互场景用）
+  (无 scope-flag) 默认: base-level, 部署到 <PLUME_ROOT 父目录>/.claude/
+                       仅在 cwd 处于该父目录下时, Claude Code 才加载本仓库 skills
+  --global         部署到 ~/.claude/ (user-level), 全机生效, 带强警告
+  --base <path>    部署到 <path>/.claude/ (自定义独立 scope)
+  --dry-run        预览不执行（仍会列出即将删除的项目）
+  --yes            自动确认所有删除（跳过交互提示，非交互场景用）
 
-部署模型（独立 scope，共享同一 git 源）:
+为什么默认是 base-level (不是 user-level)?
+  Claude Code 加载规则: enterprise > personal (user-level) > project (base-level)。
+  user-level 永远覆盖同名 project-level skill。装在 user-level 会让所有其他 clone
+  的 base-level 隔离失效。因此默认装到本仓库父目录的 .claude/, 多 clone 天然隔离;
+  若你确定全机只会有一份 plume-skills, 显式 --global 即可。
+
+部署模型（多 scope 互不干扰）:
   每个 scope（~/.claude/ 或 <base>/.claude/）独立部署，自有 marker 与 symlinks，
-  全部指向同一份 git 仓库源（本目录）。git pull 一次，各 scope 各自跑 --update
-  即可同步。多个 scope 之间互不干扰。
+  全部指向同一份 git 仓库源。git pull 一次，各 scope 各自跑 --update 即可同步。
 
 删除安全:
-  任何删除操作（遗留 skill 链接 / 废弃 data 文件 / config 字段 / plume-context 数据）
+  任何删除操作（卸载 / 遗留 skill 链接 / 废弃 data 文件 / config 字段）
   都会先列出完整路径和大小，等待 [y/N] 确认。默认保守（拒绝即跳过）。
 
 Scope 隔离铁律:
-  所有 --update / --repair 只操作 .plume-install-state.json marker 记录的 deploy_root。
-  若要切换部署点，先在原点 --update 清理，或手动删除 marker。
+  所有 --update / --repair / --uninstall 只操作 marker 记录的 deploy_root。
+  若要切换部署点, 先在原点 --uninstall 清理。
 
 示例:
-  # 用户根 scope（个人机器，影响全局）
+  # 默认 (多 clone 友好, 装到 PLUME_ROOT 父目录)
   ./install.sh
 
-  # 独立 scope（共享 root / 项目隔离 / 多环境并存）
-  ./install.sh --base /root/plume
-  ./install.sh --base /root/plume/sub-env
+  # 全机生效 (确认只会有一份 clone 时使用)
+  ./install.sh --global
+
+  # 任意自定义 scope (项目隔离 / 多环境并存)
   ./install.sh --base /opt/work-project
 
-  # 日常更新（marker 决定 scope，逐个执行）
+  # 升级 / 修复 / 卸载 (跟首装时同样的 scope-flag)
   git pull
-  ./install.sh --update --base /root/plume
-  ./install.sh --update --base /root/plume/sub-env
+  ./install.sh --update                       # 更新默认 base-level
+  ./install.sh --update --global              # 更新 user-level
+  ./install.sh --update --base /opt/work      # 更新自定义 scope
+  ./install.sh --uninstall --global           # 卸 user-level
+
+  # 诊断
+  ./install.sh --doctor
 EOF
 }
 
@@ -826,12 +1153,15 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --update)     CMD="update"; shift ;;
     --repair)     CMD="repair"; shift ;;
+    --uninstall)  CMD="uninstall"; shift ;;
+    --doctor)     CMD="doctor"; shift ;;
     cron)         CMD="cron"; shift
                   if [ "${1:-}" ] && [[ "$1" =~ ^[0-9] ]]; then
                     CRON_TIME="$1"; shift
                   fi ;;
     archive)      CMD="archive"; shift; ARCHIVE_PATTERN="${1:---all}"; shift 2>/dev/null || true ;;
     --base)       shift; BASE_DIR="${1:?--base 需要指定路径}"; shift ;;
+    --global)     USE_USER_LEVEL=true; shift ;;
     --dry-run)    DRY_RUN=true; shift ;;
     --yes|-y)     ASSUME_YES=true; shift ;;
     --help|-h)    usage; exit 0 ;;
@@ -839,14 +1169,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --base 与 --global 互斥
+if [ -n "$BASE_DIR" ] && $USE_USER_LEVEL; then
+  err "--base 与 --global 互斥, 不能同时使用"
+  exit 1
+fi
+
 # 默认命令：全新安装
 [ -z "$CMD" ] && CMD="install"
 
 case "$CMD" in
-  install) cmd_install ;;
-  update)  cmd_update ;;
-  repair)  cmd_repair ;;
-  cron)    cmd_cron ;;
-  archive) cmd_archive "$ARCHIVE_PATTERN" ;;
-  *)       usage; exit 1 ;;
+  install)   cmd_install ;;
+  update)    cmd_update ;;
+  repair)    cmd_repair ;;
+  uninstall) cmd_uninstall ;;
+  doctor)    cmd_doctor ;;
+  cron)      cmd_cron ;;
+  archive)   cmd_archive "$ARCHIVE_PATTERN" ;;
+  *)         usage; exit 1 ;;
 esac

@@ -51,23 +51,32 @@ Tier 1 （按需加载）
 
 **Ask-Before-Persist（通用 gate）** — 写任何文档 / 创建 commit / push 前，先报目标路径等用户确认。
 
-## 部署模型：独立 scope 共享同一 git 源
+## 部署模型：默认 base-level, 多 clone 天然隔离
 
 ```
 git repo (唯一真相源)
   /path/to/plume-skills/
 
-独立 scope 部署点（每个 scope 自有 marker + symlinks，全部指向上面那一份源）：
-  ~/.claude/                          ← 用户根 scope（全局影响）
-  /root/plume/.claude/                ← 独立 scope（仅在该目录下的会话生效）
-  /root/plume/sub-env/.claude/        ← 另一独立 scope（同上）
-  /opt/work-project/.claude/          ← 任意多个 scope 都可
+部署目标（按 scope-flag 区分, 每个 scope 自有 marker + symlinks 指向上面那一份源）：
+  默认 (无旗)             → <PLUME_ROOT 父目录>/.claude/   ← base-level (推荐)
+  --global                → ~/.claude/                    ← user-level (全机生效, 多 clone 会冲突)
+  --base /opt/foo         → /opt/foo/.claude/             ← 自定义 scope
 ```
 
+**为什么默认是 base-level (不是 user-level)?**
+
+Claude Code 加载规则: `enterprise > personal (user-level) > project (base-level)`。
+user-level 永远覆盖同名 project-level skill。如果你装在 user-level, 那么所有用 `--base`
+或默认装的其他 clone 都会被 user-level 静默覆盖, 多 scope 隔离失效。
+
+因此**默认装到本仓库父目录的 .claude/**, 多 clone 天然落在不同父目录, 互不干扰。
+如果你确定全机只会有一份 plume-skills, 用 `--global` 显式装 user-level 即可。
+
 **核心特性**：
-- 多个 scope 互不干扰，各自独立 marker + 独立更新节奏
-- 所有 scope 的 symlink 指向同一 git 仓库源 → `git pull` 一次，各 scope 各自跑 `--update` 即可同步
+- 默认多 clone 隔离, 各自父目录独立 marker
+- 所有 scope 的 symlink 指向同一 git 仓库源 → `git pull` 一次, 各 scope 各自跑 `--update` 即可同步
 - 删除某个 scope 不影响其他 scope（不会跨 scope 扫描或修改）
+- `--doctor` 命令检测错配 (user-level 覆盖 base-level 等)
 
 ## 安装
 
@@ -76,40 +85,56 @@ git clone https://github.com/<your>/plume-skills.git /path/to/plume-skills
 cd /path/to/plume-skills
 ```
 
-### 用户根 scope（个人机器）
+### 默认 (base-level, 推荐多 clone 场景)
 
 ```bash
-./install.sh                # → ~/.claude/，对你账户下所有项目生效
+./install.sh                # → <PLUME_ROOT 父目录>/.claude/
 ```
 
-### 独立 scope（共享 root / 多环境隔离）
+仅在 cwd 处于 `<PLUME_ROOT 父目录>/` 下时, Claude Code 才加载本仓库 skills。
+不同 clone 装到各自父目录, 天然隔离。
+
+### 全机生效 (`--global`, 单 clone 场景)
 
 ```bash
-./install.sh --base /root/plume                  # → /root/plume/.claude/
-./install.sh --base /root/plume/sub-env          # → sub-env/.claude/（另一独立环境）
-./install.sh --base /opt/work-project            # → 任意路径
+./install.sh --global       # → ~/.claude/
 ```
 
-仅在 `<base>` 目录下启动的 Claude 会话才加载该 scope 的 skills（不污染其他账号或路径）。每个 scope 有自己的 `.plume-install-state.json` marker。
+⚠️ 装 user-level 后, 任何其他 clone 的 base-level 安装的同名 skill 会被本次安装静默覆盖。
+仅在你确认只会有一份 plume-skills clone 时使用。命令会弹出 [y/N] 二次确认。
 
-### 更新 / 修复 / 预览
-
-多个 scope 需逐个执行更新（这是有意的隔离）：
+### 自定义 scope (`--base`)
 
 ```bash
-# 日常更新（同步 skills/hooks/权限 + 清理 v1/v2 遗留，每批删除都会显式确认）
+./install.sh --base /opt/work-project          # → /opt/work-project/.claude/
+```
+
+适合项目级独立环境。
+
+### 更新 / 修复 / 卸载 / 诊断
+
+scope-flag 跟首装时一致：
+
+```bash
 git pull
-./install.sh --update                                       # 用户根 scope
-./install.sh --update --base /root/plume                    # 独立 scope 1
-./install.sh --update --base /root/plume/sub-env            # 独立 scope 2
 
-# 搬迁目录后全量重建
-./install.sh --repair [--base <path>]
+# 默认 base-level
+./install.sh --update
+./install.sh --repair
+./install.sh --uninstall
 
-# 预览不执行（任何命令都支持；会列出将删除项）
+# user-level
+./install.sh --update --global
+./install.sh --uninstall --global
+
+# 自定义 scope
+./install.sh --update --base /opt/work-project
+
+# 诊断所有 scope 状态 + 错配检测 (不改 fs)
+./install.sh --doctor
+
+# 预览 / 非交互
 ./install.sh --update --dry-run
-
-# 非交互确认（CI / 自动化场景，跳过 y/N 提示）
 ./install.sh --update --yes
 ```
 
@@ -133,11 +158,12 @@ cron 自动从 config 时区转为本机时区，同 scope 重复执行会更新
 
 ### Scope 隔离铁律
 
-install.sh 在 `<deploy-root>/.plume-install-state.json` 维护 marker，记录本次部署的 deploy_root / base / installed_skills / hooks / updated_at。
+install.sh 在 `<deploy-root>/.plume-install-state.json` 维护 marker，记录本次部署的 deploy_root / base / plume_root / installed_skills / hooks / updated_at。
 
-- `--update` / `--repair` **只操作 marker 记录的 deploy_root**，绝不跨部署点扫描或删除
-- 切换部署点必须先在原点执行 `--update` 或手动删除 marker
+- `--update` / `--repair` / `--uninstall` **只操作 marker 记录的 deploy_root**，绝不跨部署点扫描或删除
+- 同一 deploy_root 被另一份 plume-skills 仓库占用时, install 拒绝静默覆盖 (exit 1, 要求人工裁决)
 - 多部署点需要逐个执行更新（这是有意的隔离）
+- 装 base-level 时, 自动 sanity check `~/.claude/skills/` 是否有其他仓库的同名残留 (会覆盖本次安装), 给出明确警告与卸载指引
 
 ### 显式删除确认
 
