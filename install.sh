@@ -879,12 +879,21 @@ cmd_doctor() {
     local scope="${scopes[$i]}"
     local label="${labels[$i]}"
 
-    if [ ! -d "$scope/skills" ] && [ ! -f "$scope/.plume-install-state.json" ]; then
+    local mf="$scope/.plume-install-state.json"
+    local has_symlinks=false
+    if [ -d "$scope/skills" ]; then
+      local skill
+      for skill in "${V3_SKILLS[@]}"; do
+        [ -L "$scope/skills/$skill" ] && { has_symlinks=true; break; }
+      done
+    fi
+
+    # 完全没装: 既无 marker 又无 v3 skill symlink
+    if [ ! -f "$mf" ] && ! $has_symlinks; then
       info "  [ ] $label — 未安装"
       continue
     fi
 
-    local mf="$scope/.plume-install-state.json"
     local marker_plume="(无 marker)"
     if [ -f "$mf" ]; then
       marker_plume="$(jq -r '.plume_root // "?"' "$mf" 2>/dev/null || echo "?")"
@@ -895,7 +904,7 @@ cmd_doctor() {
     if [ "$marker_plume" = "$PLUME_ROOT" ]; then
       ok "  [✓] $label — 本仓库已装"
     elif [ "$marker_plume" = "(无 marker)" ]; then
-      warn "  [?] $label — 有 skills/ 但无 marker (异常状态)"
+      warn "  [?] $label — 有 skills symlink 但无 marker (异常状态)"
     else
       info "  [○] $label — 装的是另一份: $marker_plume"
     fi
