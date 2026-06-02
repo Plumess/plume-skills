@@ -91,6 +91,9 @@ Read MEMORY.md for project context (background only).
 
 **Step 3** — Generate using `$PLUME_ROOT/templates/daily-report.md`. Write to `$PLUME_ROOT/data/journal/YYYY-MM-DD.md`. If file exists → **Report Update**.
 
+> ⚠️ **Path trap — resolve `$PLUME_ROOT` from config, never from the working directory.** `$PLUME_ROOT` is the `plume_root` value in `config.yml` (e.g. `/root/plume/plume-skills`). It is **NOT** the cwd — cron launches from the parent project dir (e.g. `/root/plume`), which biases toward dropping the install subdir. Write the FULL path *including* that subdir; never collapse to `~/<project>/data/...` or `<cwd>/data/...`.
+> **Self-check before every `data/` write** (journal AND reports): `ls $PLUME_ROOT/data/journal/` — it must already list prior reports. If it's empty or missing (and this is not a brand-new install), you mis-resolved `$PLUME_ROOT` (almost always a dropped path segment) — re-read `config.yml` `plume_root` and correct the path before writing.
+
 If a scratch directory was created in Step 2, `rm -rf $PLUME_ROOT/data/.tmp/digest-<YYYYMMDD-HHMMSS>/` before exiting.
 
 > **Exclude self-referential digest work**: If a session's slice content is almost entirely a `/digest` command invocation and its execution trace, treat it as noise and omit it from the report — no entry, no count, no mention. The daily report describes user work, not the act of generating itself (e.g. do not emit "自动生成日报" / "Cron 触发 digest" style entries).
