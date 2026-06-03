@@ -28,10 +28,8 @@ This skill documents framework mechanics only. Behavior principles are injected 
 
 | Path | Purpose |
 |---|---|
-| `$PLUME_ROOT/config.yml` | Framework config (locale, digest) |
-| `$PLUME_ROOT/templates/` | Shared templates (git-plan.md, daily-report.md, research-report.md) |
-| `$PLUME_ROOT/data/journal/` | Digest daily reports (output) |
-| `$PLUME_ROOT/data/reports/` | Digest research reports (output) |
+| `$PLUME_ROOT/config.yml` | Framework config (locale) |
+| `$PLUME_ROOT/templates/` | Shared templates (git-plan.md) |
 | `$PLUME_ROOT/.plume-install-state.json` | install.sh deploy marker (do not hand-edit) |
 
 ### Project output default paths (suggestions — always confirm via Ask-Before-Persist)
@@ -49,7 +47,7 @@ This skill documents framework mechanics only. Behavior principles are injected 
 
 | Path | Content |
 |---|---|
-| `~/.claude/projects/<slug>/*.jsonl` | Session transcripts (digest source of truth) |
+| `~/.claude/projects/<slug>/*.jsonl` | Session transcripts (Claude native) |
 | `~/.claude/projects/<slug>/memory/MEMORY.md` | Auto-memory index (Claude native) |
 
 `slug = pwd | sed 's|/|-|g'` (keeps leading dash).
@@ -66,13 +64,11 @@ Do not attempt automatic proxy configuration or URL rewrites.
 
 ## Privacy & Scope
 
-Project data is isolated by Claude project slug (`pwd | sed 's|/|-|g'`). Each project's data lives under `~/.claude/projects/<slug>/`.
-
-`digest` uses `--scope <keyword>` to aggregate across projects whose slug contains the keyword as a substring. Different scopes produce separate reports, providing natural isolation between work/personal/client contexts.
+Project data is isolated by Claude project slug (`pwd | sed 's|/|-|g'`). Each project's data lives under `~/.claude/projects/<slug>/`, providing natural isolation between work/personal/client contexts.
 
 ## Optional Wrapper Extension Pattern
 
-**Not used by default in v3.** Plume's own skills (`using-plume`, `code-review`, `socratic-dialogue`, `digest`) are standalone. This pattern is documented only for the case where you want to integrate an external/community skill under plume's governance with project-level customizations.
+**Not used by default in v3.** Plume's own skills (`using-plume`, `code-review`, `socratic-dialogue`) are standalone. This pattern is documented only for the case where you want to integrate an external/community skill under plume's governance with project-level customizations.
 
 To create a wrapper:
 

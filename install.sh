@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # plume-skills v3 部署器
-# 用法：./install.sh [--base <path>] | --update | --repair | cron [HH:MM] | archive <keyword|--all>
+# 用法：./install.sh [--base <path>] | --update | --repair | archive <keyword|--all>
 # 模型：每个 scope（~/.claude/ 或 <base>/.claude/）独立部署，全部 symlink 指向同一 git 仓库源。
 
 set -euo pipefail
@@ -20,7 +20,7 @@ BASE_DIR=""
 USE_USER_LEVEL=false   # --global 显式装到 ~/.claude/ 时为 true
 
 # ─── v3 Skill 清单（平铺，无 core/project 分流）────────────
-V3_SKILLS=(using-plume code-review socratic-dialogue digest)
+V3_SKILLS=(using-plume code-review socratic-dialogue)
 
 # ─── 已知 v1/v2 遗留 skill 名（文档用途；清理由 scan_orphan_links 统一按"指向 plume-skills 的 symlink"规则处理）
 # brainstorming, context-keeper, writing-plans, executing-plans,
@@ -435,47 +435,6 @@ write_plume_root() {
   ok "  plume_root 已设为 $PLUME_ROOT"
 }
 
-# ─── 交互式 digest 配置（仅 fresh install 走） ────────────────
-interactive_digest_config() {
-  $DRY_RUN && return 0
-  echo ""
-  info "配置 digest"
-  echo ""
-
-  local current_scope suggested_scope
-  current_scope="$(grep -oP '^\s*default_scope:\s*"\K[^"]*' "$PLUME_ROOT/config.yml" 2>/dev/null || true)"
-  if [ -n "$BASE_DIR" ]; then
-    suggested_scope="$(basename "$BASE_DIR")"
-  else
-    suggested_scope="$(basename "$HOME")"
-  fi
-  local default_scope="${current_scope:-$suggested_scope}"
-
-  info "  日报作用域 (default_scope)"
-  info "  scope 用于过滤 ~/.claude/projects/ 中的项目目录名（子串匹配）。"
-  info "  例如 scope=\"plume\" 会匹配 -root-plume、-root-plume-project-a 等。"
-  echo ""
-  read -rp "  default_scope [$default_scope]: " input_scope
-  local final_scope="${input_scope:-$default_scope}"
-  if [ -n "$final_scope" ] && [ "$final_scope" != "$current_scope" ]; then
-    sed -i "s|^\(\s*default_scope:\).*|\1 \"$final_scope\"|" "$PLUME_ROOT/config.yml"
-    ok "  default_scope = \"$final_scope\""
-  fi
-
-  local current_cron current_tz
-  current_cron="$(grep -oP '^\s*cron_time:\s*"\K[^"]*' "$PLUME_ROOT/config.yml" 2>/dev/null || echo "06:00")"
-  current_tz="$(grep -oP '^\s*timezone:\s*"\K[^"]*' "$PLUME_ROOT/config.yml" 2>/dev/null || echo "Asia/Shanghai")"
-  echo ""
-  read -rp "  日报生成时间 (cron_time, 时区: $current_tz) [$current_cron]: " input_cron
-  local final_cron="${input_cron:-$current_cron}"
-  if [ "$final_cron" != "$current_cron" ]; then
-    sed -i "s|^\(\s*cron_time:\).*|\1 \"$final_cron\"|" "$PLUME_ROOT/config.yml"
-    ok "  cron_time = \"$final_cron\""
-  fi
-
-  echo ""
-  info "运行 ./install.sh cron 配置定时日报生成。"
-}
 
 # ─── 扫描未知 skill 链接（指向 plume-skills 但不在 V3_SKILLS）
 scan_orphan_links() {
@@ -654,7 +613,6 @@ cmd_install() {
   sanity_check_user_level_residue
 
   ok "安装完成。"
-  interactive_digest_config
 }
 
 # ─── 命令：update（scope-aware 增量同步） ──────────────────────
@@ -987,106 +945,6 @@ cmd_archive() {
   fi
 }
 
-# ─── 命令：cron（写 digest 定时任务） ──────────────────────────
-cmd_cron() {
-  local config="$PLUME_ROOT/config.yml"
-
-  command -v python3 &>/dev/null || { err "需要 python3 做时区转换"; exit 1; }
-  command -v crontab &>/dev/null || { err "未找到 crontab。安装: sudo apt install cron / sudo dnf install cronie"; exit 1; }
-
-  local scope; scope="$(grep -oP '^\s*default_scope:\s*"\K[^"]*' "$config" 2>/dev/null || true)"
-  [ -z "$scope" ] && { err "config.yml 中 digest.default_scope 为空。先运行 ./install.sh"; exit 1; }
-
-  local cron_marker="# plume-skills-digest:$scope"
-
-  local config_cron cli_time
-  config_cron="$(grep -oP '^\s*cron_time:\s*"\K[^"]*' "$config" 2>/dev/null || echo "06:00")"
-  cli_time="${CRON_TIME:-}"
-  local use_time="${cli_time:-$config_cron}"
-  local target_hour="$((10#${use_time%%:*}))"
-  local target_min="$((10#${use_time##*:}))"
-
-  if [ -n "$cli_time" ] && [ "$cli_time" != "$config_cron" ]; then
-    sed -i "s|^\(\s*cron_time:\).*|\1 \"$cli_time\"|" "$config"
-    ok "config.yml cron_time 更新为 \"$cli_time\""
-  fi
-
-  local cron_result
-  cron_result="$(python3 -c "
-import datetime
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    from backports.zoneinfo import ZoneInfo
-
-target_tz_name = 'Asia/Shanghai'
-try:
-    import yaml
-    c = yaml.safe_load(open('$config'))
-    target_tz_name = c.get('locale', {}).get('timezone', 'Asia/Shanghai')
-except Exception:
-    pass
-
-target_tz = ZoneInfo(target_tz_name)
-local_tz = datetime.datetime.now().astimezone().tzinfo
-dt = datetime.datetime.combine(datetime.date.today(), datetime.time($target_hour, $target_min), tzinfo=target_tz)
-local_dt = dt.astimezone(local_tz)
-day_diff = (local_dt.date() - dt.date()).days
-note = f'跨天：{target_tz_name} {$target_hour:02d}:{$target_min:02d} = 本机前一天 {local_dt.strftime(\"%H:%M\")}' if day_diff != 0 else f'{target_tz_name} {$target_hour:02d}:{$target_min:02d} = 本机 {local_dt.strftime(\"%H:%M\")}'
-print(f'{local_dt.minute} {local_dt.hour}|{target_tz_name}|{note}')
-" 2>&1)"
-  if [ -z "$cron_result" ] || echo "$cron_result" | grep -q "Traceback\|Error"; then
-    err "时区转换失败: $cron_result"
-    exit 1
-  fi
-
-  local cron_time tz_name tz_note
-  IFS='|' read -r cron_time tz_name tz_note <<< "$cron_result"
-
-  local project_dir
-  if [ -n "$BASE_DIR" ]; then
-    project_dir="$BASE_DIR"
-  else
-    project_dir="$(dirname "$PLUME_ROOT")"
-  fi
-
-  local date_cmd
-  if [[ "$(uname)" == "Darwin" ]]; then
-    date_cmd="\$(TZ=$tz_name date -v-1d +\\%Y-\\%m-\\%d)"
-  else
-    date_cmd="\$(TZ=$tz_name date -d yesterday +\\%Y-\\%m-\\%d)"
-  fi
-
-  local claude_bin; claude_bin="$(command -v claude 2>/dev/null || true)"
-  [ -z "$claude_bin" ] && { err "未找到 claude CLI"; exit 1; }
-
-  local cron_line="$cron_time * * * cd $project_dir && $claude_bin -p \"/digest daily $date_cmd --scope $scope\" --allowedTools \"Write Read Glob Grep Bash(head:*) Bash(stat:*) Bash(ls:*) Bash(mkdir:*) Bash(find:*)\" --output-format text >> $PLUME_ROOT/data/cron.log 2>&1 $cron_marker"
-
-  echo ""
-  info "日报 cron — scope: $scope（$tz_note）"
-
-  if $DRY_RUN; then
-    info "将写入 crontab:"
-    echo "  $cron_line"
-    return 0
-  fi
-
-  local existing filtered
-  existing="$(crontab -l 2>/dev/null || true)"
-  filtered="$(echo "$existing" | grep -v "$cron_marker" || true)"
-  echo "${filtered:+$filtered
-}$cron_line" | crontab -
-
-  ok "crontab 已更新:"
-  echo "  $cron_line"
-
-  if command -v systemctl &>/dev/null; then
-    if ! systemctl is-active --quiet cron 2>/dev/null && ! systemctl is-active --quiet crond 2>/dev/null; then
-      warn "cron 服务未运行。启动: sudo systemctl start cron"
-    fi
-  fi
-}
-
 # ─── 帮助 & 入口 ─────────────────────────────────────────────
 usage() {
   cat <<'EOF'
@@ -1100,7 +958,6 @@ plume-skills v3 部署器
   ./install.sh --repair [scope-flag] [--dry-run]      全量重建
   ./install.sh --uninstall [scope-flag] [--dry-run]   卸载指定 scope (保留源文件)
   ./install.sh --doctor                               诊断所有 scope 状态 + 错配检测
-  ./install.sh cron [HH:MM]                           写 digest 日报 cron
   ./install.sh archive <keyword|--all>                归档 data/ 项目数据
   ./install.sh --help                                 显示帮助
 
@@ -1156,7 +1013,6 @@ EOF
 
 CMD=""
 ARCHIVE_PATTERN=""
-CRON_TIME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -1164,10 +1020,6 @@ while [[ $# -gt 0 ]]; do
     --repair)     CMD="repair"; shift ;;
     --uninstall)  CMD="uninstall"; shift ;;
     --doctor)     CMD="doctor"; shift ;;
-    cron)         CMD="cron"; shift
-                  if [ "${1:-}" ] && [[ "$1" =~ ^[0-9] ]]; then
-                    CRON_TIME="$1"; shift
-                  fi ;;
     archive)      CMD="archive"; shift; ARCHIVE_PATTERN="${1:---all}"; shift 2>/dev/null || true ;;
     --base)       shift; BASE_DIR="${1:?--base 需要指定路径}"; shift ;;
     --global)     USE_USER_LEVEL=true; shift ;;
@@ -1193,7 +1045,6 @@ case "$CMD" in
   repair)    cmd_repair ;;
   uninstall) cmd_uninstall ;;
   doctor)    cmd_doctor ;;
-  cron)      cmd_cron ;;
   archive)   cmd_archive "$ARCHIVE_PATTERN" ;;
   *)         usage; exit 1 ;;
 esac

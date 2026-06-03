@@ -31,9 +31,10 @@ Tier 0 （每 session 常驻，~900 tokens）
 Tier 1 （按需加载）
 ├── skills/using-plume/         — 框架机制（路径、网络、隐私、wrapper 扩展点）
 ├── skills/code-review/         — 基于三本经典的结构化审查（P0/P1/P2 分级）
-├── skills/socratic-dialogue/   — 苏格拉底式三人设引导对话（显式触发）
-└── skills/digest/              — 日报 / 研究报告（沿用，可 cron 自动）
+└── skills/socratic-dialogue/   — 苏格拉底式三人设引导对话（显式触发）
 ```
+
+> 日报 / 研究报告（digest）已拆分到独立仓库 [plume-digest](https://github.com/Plumess/plume-digest)，与 plume-skills 解耦、可共存。
 
 没有 vendor，没有 wrapper 强制链路。所有工作流概念提炼进原则常驻；需要结构化输出或仪式感的工作才成为独立 skill。
 
@@ -138,15 +139,6 @@ git pull
 ./install.sh --update --yes
 ```
 
-### 写入 digest 日报定时任务
-
-```bash
-./install.sh cron              # 使用 config.yml 中的 cron_time
-./install.sh cron 21:00        # 指定时间（同时更新 config）
-```
-
-cron 自动从 config 时区转为本机时区，同 scope 重复执行会更新而非追加。
-
 ### 打包归档
 
 ```bash
@@ -189,11 +181,10 @@ install.sh 在 `<deploy-root>/.plume-install-state.json` 维护 marker，记录�
 
 ```
 plume-skills/
-├── skills/                                    # 4 个
+├── skills/                                    # 3 个
 │   ├── using-plume/SKILL.md                   #   机制承载
 │   ├── code-review/SKILL.md                   #   结构化审查
-│   ├── socratic-dialogue/SKILL.md             #   三人设引导
-│   └── digest/                                #   日报 / 研究报告
+│   └── socratic-dialogue/SKILL.md             #   三人设引导
 │
 ├── hooks/
 │   ├── hooks.json                             # 注册 SessionStart + UserPromptSubmit
@@ -201,15 +192,14 @@ plume-skills/
 │   ├── user-prompt-submit                     # 注入 PLUME_ROOT 信号
 │   └── principles.md                          # Tier 0 原则文本（~900 tokens）
 │
-├── templates/                                 # digest 相关模板 + git-plan
-├── data/                                      # digest 产出（journal / reports）
-├── config.yml                                 # locale + digest 段
+├── templates/                                 # git-plan 模板
+├── data/                                      # 运行期数据（权限 manifest / 归档）
+├── config.yml                                 # locale
 ├── install.sh                                 # 部署器（含 marker + scope guard + 删除确认）
 ├── README.md                                  # 本文件
 ├── LICENSE
 └── docs/
     ├── slim-design.md                         # 完整瘦身设计文档（v1 → v2 → v3 演进）
-    ├── auto-digest-cron.md                    # digest cron 配置说明
     └── andrej-karpathy-skills-main/           # 原 karpathy CLAUDE.md 参考
 ```
 
@@ -247,14 +237,9 @@ plume-skills/
 
 **严格显式触发**，不自动激活，避免干扰日常节奏。
 
-### digest — 日报 / 研究报告（沿用现有设计）
+### 日报 / 研究报告 → 已独立为 [plume-digest](https://github.com/Plumess/plume-digest)
 
-从 Claude 原生 jsonl 生成跨项目日报和研究报告。
-- `/digest daily` — 今日日报
-- `/digest daily 2026-03-15 --scope plume` — 指定日期/作用域
-- `/digest report 用户认证相关的工作` — 自然语言语义匹配研究报告
-
-scope 对 `~/.claude/projects/` 下项目目录名做子串匹配，天然隔离公司/个人项目。
+digest（日报 / 研究报告）已从 plume-skills 拆出，成为独立仓库。它与 plume-skills 完全解耦、可共存：各自 `install.sh`，hooks 写不同文件（plume-skills 用 `settings.local.json`、plume-digest 用 `settings.json`），装到同一个 `.claude` 也互不干扰。需要日报功能见该仓库。
 
 ## Credits
 
