@@ -425,8 +425,17 @@ migrate_legacy() {
   scan_plume_context_data
 }
 
+# ─── 从 example 生成 config（不存在时）────────────────────────
+ensure_config() {
+  [ -f "$PLUME_ROOT/config.yml" ] && return 0
+  if $DRY_RUN; then info "  将从 config.yml.example 生成 config.yml"; return 0; fi
+  cp "$PLUME_ROOT/config.yml.example" "$PLUME_ROOT/config.yml"
+  ok "  已从 config.yml.example 生成 config.yml"
+}
+
 # ─── 写 plume_root 到 config ──────────────────────────────────
 write_plume_root() {
+  ensure_config
   if $DRY_RUN; then
     info "  将写入 plume_root=$PLUME_ROOT 到 config.yml"
     return 0

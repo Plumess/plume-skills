@@ -1,0 +1,8 @@
+# plume-skills 配置示例
+# 安装时 install.sh 会从本文件生成 config.yml（config.yml 不入库）；按需修改下面的值。
+plume_root: ""                 # install.sh 自动写入本仓库绝对路径
+
+# 本地化设置
+locale:
+  timezone: "Asia/Shanghai"    # 时区
+  language: "zh-CN"            # 生成文档语言：设计文档等人类可阅读文档均使用此语言

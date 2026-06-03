@@ -9,3 +9,5 @@ data/
 # docs
 docs/
 progress.md
+# 本机配置（从 config.yml.example 生成）
+config.yml
