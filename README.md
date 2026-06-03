@@ -14,7 +14,7 @@
 
 **全新简化版** — 基于 最新 **harness**思想 + **Andrej Karpathy** 极简哲学，对原有框架做完全重构：
 
-- **抛弃 wrapper 强制链路**：原 16 个 wrapper + 2 vendor 浓缩为 **1 份常驻原则 + 4 个自研 skill**
+- **抛弃 wrapper 强制链路**：原 16 个 wrapper + 2 vendor 浓缩为 **1 份常驻原则 + 3 个自研 skill**
 - **原则常驻取代 skill 堆叠**：karpathy 4 条核心原则 + Plume 3 条工作流原则 + Ask-Before-Persist gate 在 SessionStart 注入，Tier 0 永远在线
 - **Skill 触发交给 harness**：不再手动维护 catalog，依赖 Claude Code 原生的 description 自动列出与匹配
 - **Token 预算大幅下降**：常驻成本从 ~4K → **~1.2K tokens**（-70%）；调用一个 skill 的总成本从 ~7K → ~2.7K（-60%）
